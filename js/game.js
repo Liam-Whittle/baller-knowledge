@@ -489,6 +489,7 @@
         view.startLocal = Date.now() + st.startsInMs;
         view.endLocal = Date.now() + st.remainingMs;
       }
+      Music.setMode(st.phase === "lobby" ? "menu" : "game");
       ({ lobby: mountLobby, round: mountRound, reveal: mountReveal, final: mountFinal })[st.phase]();
     } else {
       ({ lobby: updateLobby, round: updateRound, reveal: () => {}, final: () => {} })[st.phase]();
@@ -523,6 +524,7 @@
 
   // ---------- Home ----------
   function mountHome() {
+    Music.setMode("menu");
     view.key = null;
     clearInterval(view.tick);
     const params = new URLSearchParams(location.search);
@@ -1351,8 +1353,13 @@
   });
 
   // ---------- Background music (a per-player setting, saved in this browser) ----------
-  (function setupMusic() {
-    const audio = $("#music");
+  // Two playlists: a menu track (home + lobby, looping) and the in-game tracks
+  // (alternating). Switching between them crossfades.
+  const Music = (function setupMusic() {
+    const game = $("#music");
+    const menu = new Audio("assets/music-menu.mp3");
+    menu.loop = true;
+    menu.preload = "none";
     const btn = $("#sound-btn");
     const panel = $("#sound-panel");
     const onEl = $("#music-on");
@@ -1363,31 +1370,70 @@
     onEl.checked = enabled;
     volEl.value = volume;
 
-    const play = () => { if (enabled && volume > 0) audio.play().catch(() => {}); };
-
-    // Two tracks that alternate: when one ends, the other starts.
-    const TRACKS = ["assets/music-1.mp3", "assets/music-2.mp3"];
-    let track = 0;
-    audio.addEventListener("ended", () => {
-      track = (track + 1) % TRACKS.length;
-      audio.src = TRACKS[track];
-      play();
-    });
     // The music sits well under the sound effects: 100% on the slider is 35% real volume.
     const MUSIC_LEVEL = 0.35;
+    const FADE_MS = 1400;
+    let mode = "menu";
+    let unlocked = false; // browsers block audio until the first tap or keypress
+    const fade = new Map([[menu, { v: 1, target: 1 }], [game, { v: 0, target: 0 }]]);
+    const active = () => (mode === "menu" ? menu : game);
+    const musicOn = () => enabled && volume > 0;
+    const base = () => (volume / 100) * MUSIC_LEVEL;
+    const apply = () => { for (const [el, f] of fade) el.volume = Math.max(0, Math.min(1, base() * f.v)); };
+
+    const play = () => {
+      if (!unlocked || !musicOn()) return;
+      for (const [el, f] of fade) if (f.target > 0 || f.v > 0) el.play().catch(() => {});
+    };
+
+    let raf = 0, last = 0;
+    function step(now) {
+      const dt = last ? now - last : 16;
+      last = now;
+      let moving = false;
+      for (const [el, f] of fade) {
+        if (f.v !== f.target) {
+          const d = dt / FADE_MS;
+          f.v = f.v < f.target ? Math.min(f.target, f.v + d) : Math.max(f.target, f.v - d);
+          moving = true;
+        }
+        if (f.v === 0 && f.target === 0 && !el.paused) el.pause(); // keeps its place for next time
+      }
+      apply();
+      raf = moving ? requestAnimationFrame(step) : 0;
+      if (!moving) last = 0;
+    }
+    const runFades = () => { if (!raf) raf = requestAnimationFrame(step); };
+
+    function setMode(m) {
+      if (m === mode) return;
+      mode = m;
+      for (const [el, f] of fade) f.target = el === active() ? 1 : 0;
+      play();
+      runFades();
+    }
+
+    // Two in-game tracks that alternate: when one ends, the other starts.
+    const TRACKS = ["assets/music-1.mp3", "assets/music-2.mp3"];
+    let track = 0;
+    game.addEventListener("ended", () => {
+      track = (track + 1) % TRACKS.length;
+      game.src = TRACKS[track];
+      if (mode === "game") play();
+    });
     const sfxOn = $("#sfx-on");
     const sfxVol = $("#sfx-vol");
     sfxOn.checked = Sfx.enabled;
     sfxVol.value = Sfx.volume;
 
     function sync() {
-      audio.volume = (volume / 100) * MUSIC_LEVEL;
+      apply();
       volEl.style.setProperty("--pct", `${volume}%`);
       sfxVol.style.setProperty("--pct", `${Sfx.volume}%`);
       const musicOff = !enabled || volume === 0;
       const sfxOff = !Sfx.enabled || Sfx.volume === 0;
       btn.classList.toggle("muted", musicOff && sfxOff);
-      if (!musicOff) play(); else audio.pause();
+      if (!musicOff) play(); else { menu.pause(); game.pause(); }
     }
 
     sfxOn.addEventListener("change", () => {
@@ -1423,6 +1469,7 @@
 
     // Browsers block audio until the player interacts, so start on the first tap or keypress.
     const kick = () => {
+      unlocked = true;
       play();
       Sfx.unlock();
       window.removeEventListener("pointerdown", kick);
@@ -1431,6 +1478,7 @@
     window.addEventListener("pointerdown", kick);
     window.addEventListener("keydown", kick);
     sync();
+    return { setMode };
   })();
 
   syncAiState();
