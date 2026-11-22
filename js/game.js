@@ -21,10 +21,20 @@
   const clamp = (n, [lo, hi]) => Math.min(hi, Math.max(lo, Math.round(Number(n) || lo)));
   const cleanName = (n) => String(n || "").replace(/\s+/g, " ").trim().slice(0, 16) || "Player";
 
+  // Profile pictures: "p1".."p20" for the presets, or a small uploaded image as a data URL.
+  const PRESET_COUNT = 20;
+  const MAX_AVATAR_CHARS = 60000;
+  const cleanAvatar = (v) => {
+    v = String(v || "");
+    if (/^p([1-9]|1\d|20)$/.test(v)) return v;
+    if (v.length < MAX_AVATAR_CHARS && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(v)) return v;
+    return "";
+  };
+
   // ======================================================================
   //  HOST ENGINE — runs only in the host's browser; it is the source of truth.
   // ======================================================================
-  function createHost(name) {
+  function createHost(name, avatarValue) {
     const hs = {
       code: null,
       phase: "lobby",
@@ -39,7 +49,16 @@
       reveal: null,
       timer: null,
     };
-    hs.players.set("host", { id: "host", name: cleanName(name), score: 0, connected: true, answers: [] });
+    hs.players.set("host", { id: "host", name: cleanName(name), avatar: cleanAvatar(avatarValue), score: 0, connected: true, answers: [] });
+
+    // Uploaded photos are big-ish, so they travel in their own message only when one
+    // changes or someone joins, instead of inside every state update.
+    function pushAvatars() {
+      const map = {};
+      for (const p of hs.players.values()) if (p.avatar && p.avatar.startsWith("data:")) map[p.id] = p.avatar;
+      net.broadcast({ t: "avatars", map });
+      view.avatars = map;
+    }
 
     const net = Net.host({
       onOpen(code) { hs.code = code; publish(); },
@@ -70,12 +89,22 @@
           let p;
           if (old) {
             hs.players.delete(old.id);
-            p = { ...old, id, connected: true };
+            p = { ...old, id, connected: true, avatar: cleanAvatar(msg.avatar) || old.avatar };
           } else {
-            p = { id, name: uniqueName(n), score: 0, connected: true, answers: [] };
+            p = { id, name: uniqueName(n), avatar: cleanAvatar(msg.avatar), score: 0, connected: true, answers: [] };
           }
           hs.players.set(id, p);
           net.send(id, { t: "welcome", you: id, roundId: hs.phase === "round" ? hs.startAt : null, answers: p.answers });
+          pushAvatars();
+          publish();
+          break;
+        }
+        case "avatar": {
+          const p = hs.players.get(id);
+          if (!p) return;
+          const was = p.avatar || "";
+          p.avatar = cleanAvatar(msg.avatar);
+          if (was.startsWith("data:") || p.avatar.startsWith("data:")) pushAvatars();
           publish();
           break;
         }
@@ -204,7 +233,7 @@
         roundId: hs.startAt,
         totalRounds: hs.phase === "lobby" ? hs.settings.rounds : hs.totalRounds,
         players: [...hs.players.values()].map((p) => ({
-          id: p.id, name: p.name, score: p.score, connected: p.connected, count: p.answers.length, done: !!p.done,
+          id: p.id, name: p.name, avatar: p.avatar && p.avatar.startsWith("data:") ? "custom" : p.avatar || "", score: p.score, connected: p.connected, count: p.answers.length, done: !!p.done,
         })),
         question: q ? { ...hs.ref, prompt: q.prompt, catName: cat.name, emoji: cat.emoji } : null,
         startsInMs: Math.max(0, hs.startAt - now),
@@ -231,15 +260,17 @@
   // ======================================================================
   //  GUEST — connects to a host and mirrors its state.
   // ======================================================================
-  function createGuest(name, code) {
+  function createGuest(name, code, avatarValue) {
     const s = { role: "guest", me: null, send: (m) => net.send(m), close: () => net.close() };
     const net = Net.join(code, {
-      onOpen() { net.send({ t: "hello", name }); },
+      onOpen() { net.send({ t: "hello", name, avatar: avatarValue }); },
       onData(msg) {
         if (msg.t === "welcome") {
           s.me = msg.you;
           view.answersRound = msg.roundId;
           view.myAnswers = msg.answers || [];
+        } else if (msg.t === "avatars") {
+          view.avatars = msg.map || {};
         } else if (msg.t === "state") {
           onState(msg.state);
         }
@@ -255,7 +286,18 @@
   // ======================================================================
   let session = null;
   let state = null;
-  const view = { key: null, myAnswers: [], answersRound: null, startLocal: 0, endLocal: 0, tick: null, iAmDone: false, seen: new Set(), lastCd: null, lastSec: null };
+  const view = { key: null, myAnswers: [], answersRound: null, startLocal: 0, endLocal: 0, tick: null, iAmDone: false, seen: new Set(), lastCd: null, lastSec: null, avatars: {} };
+
+  // This player's own picture, saved in their browser. New players get a random preset.
+  function myAvatar() {
+    let v = cleanAvatar(store.get("bk-avatar", ""));
+    if (!v) {
+      v = `p${1 + Math.floor(Math.random() * PRESET_COUNT)}`;
+      store.set("bk-avatar", v);
+    }
+    return v;
+  }
+  const avatarSrc = (v) => (v.startsWith("p") ? `assets/avatars/${v.slice(1)}.webp` : v.startsWith("data:") ? v : "");
 
   function onState(st) {
     state = st;
@@ -286,10 +328,15 @@
   const chip = (a, cls = "") => `<span class="chip ${cls}" data-t="${a.tier}" style="--c:${Match.tier(a.tier).color}">${esc(a.display)}</span>`;
   const words = (text) => esc(text).split(" ").map((w, i) => `<span class="w" style="--i:${i}">${w}</span>`).join(" ");
 
-  function avatar(name) {
+  // Draws a player's picture: their preset or upload, falling back to a coloured initial.
+  function avatar(p) {
+    const info = (state && state.players.find((x) => x.id === p.id)) || p;
+    const v = info.avatar || "";
+    const src = v === "custom" ? view.avatars[p.id] || "" : avatarSrc(v);
+    if (src) return `<span class="avatar pic"><img src="${esc(src)}" alt="" draggable="false"></span>`;
     let h = 0;
-    for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
-    return `<span class="avatar" style="--h:${h}">${esc(name[0].toUpperCase())}</span>`;
+    for (const ch of p.name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+    return `<span class="avatar" style="--h:${h}">${esc(p.name[0].toUpperCase())}</span>`;
   }
 
   function topbar(left) {
@@ -313,9 +360,15 @@
         <p class="tagline">Name as many as you can. Only your <b>rarest</b> answer counts.</p>
 
         <form class="card stack" id="home-form">
-          <label class="field"><span>Your name</span>
-            <input id="name" maxlength="16" autocomplete="nickname" placeholder="e.g. Jordan" value="${esc(store.get("bk-name", ""))}">
-          </label>
+          <div class="identity">
+            <button type="button" class="av-btn" data-act="pick-avatar" aria-label="Change your picture">
+              <img id="my-av" src="${esc(avatarSrc(myAvatar()))}" alt="">
+              <span class="av-edit" aria-hidden="true">✎</span>
+            </button>
+            <label class="field"><span>Your name</span>
+              <input id="name" maxlength="16" autocomplete="nickname" placeholder="e.g. Jordan" value="${esc(store.get("bk-name", ""))}">
+            </label>
+          </div>
           ${room ? `
             <button class="btn primary big" type="submit" data-act="join">Join room ${esc(room)}</button>
             <input id="code" type="hidden" value="${esc(room)}">
@@ -360,7 +413,7 @@
     const n = readName();
     if (!n) return;
     showLoading("Opening a room…");
-    session = createHost(n);
+    session = createHost(n, myAvatar());
   }
 
   function startJoin() {
@@ -369,7 +422,7 @@
     const code = ($("#code").value || "").trim().toUpperCase();
     if (!/^[A-Z]{5}$/.test(code)) { toast("Room codes are 5 letters", "error"); $("#code").focus(); return; }
     showLoading(`Joining room ${code}…`);
-    session = createGuest(n, code);
+    session = createGuest(n, code, myAvatar());
   }
 
   function showLoading(msg) {
@@ -426,7 +479,9 @@
     $("#pcount").textContent = state.players.length;
     // Only players who just joined get the pop-in animation.
     $("#players").innerHTML = state.players.map((p) => `
-      <li class="${p.id === session.me ? "me" : ""} ${view.seen.has(p.id) ? "" : "new"}">${avatar(p.name)}<span class="pname">${esc(p.name)}</span>
+      <li class="${p.id === session.me ? "me" : ""} ${view.seen.has(p.id) ? "" : "new"}">${p.id === session.me
+        ? `<button class="av-mini" data-act="pick-avatar" aria-label="Change your picture">${avatar(p)}<span class="av-edit" aria-hidden="true">✎</span></button>`
+        : avatar(p)}<span class="pname">${esc(p.name)}</span>
         ${p.id === "host" ? `<span class="tag host">👑 host</span>` : ""}${p.id === session.me ? `<span class="tag you">you</span>` : ""}</li>`).join("");
     state.players.forEach((p) => view.seen.add(p.id));
     // Don't yank a number box out from under the host while they're typing in it.
@@ -554,6 +609,7 @@
         return;
       }
       feedback(`“${esc(text)}” isn't on the list`, "bad");
+      Sfx.play("wrong");
       input.classList.remove("shake"); void input.offsetWidth; input.classList.add("shake");
       input.select();
       return;
@@ -572,6 +628,7 @@
     feedback(`${esc(a.display)} ${tierBadge(a.tier, ` · ${t.points}`)}`, "good");
     input.value = "";
     renderMine(a.display, rank > prevBest);
+    Sfx.correct(rank);
 
     // Celebrate: sparkles from the box, floating points, and a banner for the big finds.
     const r = input.getBoundingClientRect();
@@ -599,7 +656,7 @@
     const el = $("#counts");
     if (!el) return;
     el.innerHTML = [...state.players].sort((a, b) => b.count - a.count).map((p) => `
-      <li class="${p.connected ? "" : "gone"} ${p.id === session.me ? "me" : ""} ${p.done ? "is-done" : ""}">${avatar(p.name)}<span class="pname">${esc(p.name)}</span>
+      <li class="${p.connected ? "" : "gone"} ${p.id === session.me ? "me" : ""} ${p.done ? "is-done" : ""}">${avatar(p)}<span class="pname">${esc(p.name)}</span>
       ${p.done ? `<span class="done-tag">done</span>` : ""}<span class="num">${p.count}</span></li>`).join("");
     const here = state.players.filter((p) => p.connected);
     const waiting = here.filter((p) => !p.done).length;
@@ -637,6 +694,7 @@
         view.lastCd = n;
         // Fresh element each second so the zoom animation replays.
         $("#cdnum").innerHTML = `<span class="cd-n">${n}</span>`;
+        Sfx.play("tick");
       }
       $("#tfill").style.width = "100%";
       $("#tnum").textContent = state.settings.timer;
@@ -647,6 +705,7 @@
       view.started = true;
       if (cd.classList.contains("show")) {
         $("#cdnum").innerHTML = `<span class="cd-n go">GO!</span>`;
+        Sfx.play("go");
         cd.classList.add("leaving");
         setTimeout(() => cd.classList.remove("show", "leaving"), 650);
       }
@@ -668,7 +727,10 @@
       view.lastSec = sec;
       const tn = $("#tnum");
       tn.textContent = sec;
-      if (low) { tn.classList.remove("tick"); void tn.offsetWidth; tn.classList.add("tick"); }
+      if (low) {
+        tn.classList.remove("tick"); void tn.offsetWidth; tn.classList.add("tick");
+        if (!view.iAmDone) Sfx.play("clock");
+      }
     }
     if (left <= 0 && !input.placeholder.startsWith("Time")) {
       input.disabled = true;
@@ -698,7 +760,7 @@
           <ol class="results">
             ${r.results.map((p, i) => `
               <li class="result ${p.id === session.me ? "me" : ""}" style="--d:${i * 140}ms">
-                ${avatar(p.name)}
+                ${avatar(p)}
                 <div class="rmain">
                   <div class="rname">${esc(p.name)}${p.id === session.me ? `<span class="you">you</span>` : ""}</div>
                   ${p.best
@@ -715,7 +777,7 @@
             <h3>Standings</h3>
             <ol class="standings">${standings.map((p, i) => `
               <li class="${p.id === session.me ? "me" : ""}" style="--w:${(p.score / top) * 100}%;--d:${500 + i * 90}ms">
-                ${avatar(p.name)}<span class="pname">${esc(p.name)}</span><span class="num">${p.score}</span>
+                ${avatar(p)}<span class="pname">${esc(p.name)}</span><span class="num">${p.score}</span>
                 <span class="bar"><i></i></span>
               </li>`).join("")}</ol>
           </section>` : ""}
@@ -726,6 +788,7 @@
         </div>
       </main>`;
 
+    Sfx.play("reveal");
     // Count each player's points up as their card lands, with sparkles for the rare picks.
     app.querySelectorAll(".gain").forEach((el) => {
       const delay = parseInt(el.style.getPropertyValue("--d"), 10) || 0;
@@ -757,18 +820,18 @@
             const place = ranked.indexOf(p);
             return `<div class="step place-${place + 1} ${p.id === session.me ? "me" : ""}">
               ${place === 0 ? `<img class="winner-crown" src="assets/crown.png" alt="">` : ""}
-              ${avatar(p.name)}<div class="pname">${esc(p.name)}</div><div class="num" data-to="${p.score}">0</div>
+              ${avatar(p)}<div class="pname">${esc(p.name)}</div><div class="num" data-to="${p.score}">0</div>
               <div class="block"><span>${medal[place]}</span></div></div>`;
           }).join("")}
         </div>
         ${ranked.length > 3 ? `<section class="card"><ol class="standings" start="4">${ranked.slice(3).map((p) => `
-          <li class="${p.id === session.me ? "me" : ""}">${avatar(p.name)}<span class="pname">${esc(p.name)}</span><span class="num">${p.score}</span></li>`).join("")}</ol></section>` : ""}
+          <li class="${p.id === session.me ? "me" : ""}">${avatar(p)}<span class="pname">${esc(p.name)}</span><span class="num">${p.score}</span></li>`).join("")}</ol></section>` : ""}
         <div class="actions">
           ${isHost() ? `<button class="btn primary big" data-act="lobby">Play again</button>` : `<p class="hint pulse">Waiting for the host to start another game…</p>`}
         </div>
       </main>`;
     app.querySelectorAll(".podium .num").forEach((el) => setTimeout(() => Fx.countUp(el, Number(el.dataset.to), 1200), 500));
-    setTimeout(() => Fx.confetti(4000), 900);
+    setTimeout(() => { Fx.confetti(4000); Sfx.play("win"); }, 900);
   }
 
   // ---------- Confirm dialog (the browser's confirm() can be blocked, so we draw our own) ----------
@@ -801,6 +864,90 @@
       document.body.appendChild(wrap);
       wrap.querySelector("[data-modal=no]").focus();
     });
+  }
+
+  // ---------- Profile picture picker ----------
+  function setMyAvatar(v) {
+    v = cleanAvatar(v);
+    if (!v) return;
+    store.set("bk-avatar", v);
+    const img = $("#my-av");
+    if (img) img.src = avatarSrc(v);
+    if (session) session.send({ t: "avatar", avatar: v });
+  }
+
+  // Centre-crops an uploaded image to a small square JPEG so it's cheap to send to everyone.
+  function imageToAvatar(file) {
+    return new Promise((resolve, reject) => {
+      if (!file || !file.type.startsWith("image/")) return reject(new Error("That file isn't an image."));
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const s = Math.min(img.width, img.height);
+        const c = document.createElement("canvas");
+        c.width = c.height = 128;
+        c.getContext("2d").drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 128, 128);
+        URL.revokeObjectURL(url);
+        let q = 0.85;
+        let data = c.toDataURL("image/jpeg", q);
+        while (data.length > MAX_AVATAR_CHARS - 1000 && q > 0.4) { q -= 0.15; data = c.toDataURL("image/jpeg", q); }
+        resolve(data);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read that image. Try a JPG or PNG.")); };
+      img.src = url;
+    });
+  }
+
+  function openAvatarPicker() {
+    const current = myAvatar();
+    const wrap = document.createElement("div");
+    wrap.className = "modal";
+    const option = (v) => `<button type="button" class="av-opt ${v === current ? "on" : ""}" data-av="${esc(v)}" aria-label="Choose this picture"><img src="${esc(avatarSrc(v))}" alt=""></button>`;
+    wrap.innerHTML = `
+      <div class="modal-box card picker" role="dialog" aria-modal="true" aria-labelledby="pick-title">
+        <h3 id="pick-title">Choose your picture</h3>
+        <div class="mine-row">
+          <span class="mine-slot">${current.startsWith("data:") ? option(current) : `<span class="av-empty" aria-hidden="true">+</span>`}</span>
+          <div class="mine-text">
+            <b>Your own photo</b>
+            <span>Square photos work best.</span>
+          </div>
+          <label class="btn small upload">Upload<input type="file" accept="image/*" hidden></label>
+        </div>
+        <div class="av-grid">
+          ${Array.from({ length: PRESET_COUNT }, (_, i) => option(`p${i + 1}`)).join("")}
+        </div>
+        <div class="picker-actions">
+          <button type="button" class="btn primary" data-close>Done</button>
+        </div>
+      </div>`;
+    const close = () => {
+      wrap.classList.add("out");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => wrap.remove(), 180);
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    const select = (v) => {
+      setMyAvatar(v);
+      wrap.querySelectorAll(".av-opt").forEach((b) => b.classList.toggle("on", b.dataset.av === v));
+    };
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap || e.target.closest("[data-close]")) return close();
+      const opt = e.target.closest(".av-opt");
+      if (opt) select(opt.dataset.av);
+    });
+    wrap.querySelector("input[type=file]").addEventListener("change", async (e) => {
+      try {
+        const data = await imageToAvatar(e.target.files[0]);
+        wrap.querySelector(".mine-slot").innerHTML = option(data);
+        select(data);
+      } catch (err) {
+        toast(err.message, "error");
+      }
+      e.target.value = "";
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(wrap);
   }
 
   // ---------- Toasts ----------
@@ -852,6 +999,7 @@
       }
       case "start": session.send({ t: "start" }); break;
       case "done": markDone(); break;
+      case "pick-avatar": e.preventDefault(); openAvatarPicker(); break;
       case "next": session.send({ t: "next" }); break;
       case "lobby": session.send({ t: "lobby" }); break;
     }
@@ -890,12 +1038,34 @@
       audio.src = TRACKS[track];
       play();
     });
+    // The music sits well under the sound effects: 100% on the slider is 35% real volume.
+    const MUSIC_LEVEL = 0.35;
+    const sfxOn = $("#sfx-on");
+    const sfxVol = $("#sfx-vol");
+    sfxOn.checked = Sfx.enabled;
+    sfxVol.value = Sfx.volume;
+
     function sync() {
-      audio.volume = volume / 100;
+      audio.volume = (volume / 100) * MUSIC_LEVEL;
       volEl.style.setProperty("--pct", `${volume}%`);
-      btn.classList.toggle("muted", !enabled || volume === 0);
-      if (enabled && volume > 0) play(); else audio.pause();
+      sfxVol.style.setProperty("--pct", `${Sfx.volume}%`);
+      const musicOff = !enabled || volume === 0;
+      const sfxOff = !Sfx.enabled || Sfx.volume === 0;
+      btn.classList.toggle("muted", musicOff && sfxOff);
+      if (!musicOff) play(); else audio.pause();
     }
+
+    sfxOn.addEventListener("change", () => {
+      Sfx.setEnabled(sfxOn.checked);
+      if (sfxOn.checked) { Sfx.unlock(); Sfx.play("tick"); }
+      sync();
+    });
+    sfxVol.addEventListener("input", () => {
+      Sfx.setVolume(sfxVol.value);
+      if (Sfx.volume > 0 && !Sfx.enabled) { Sfx.setEnabled(true); sfxOn.checked = true; }
+      sync();
+    });
+    sfxVol.addEventListener("change", () => Sfx.play("tick")); // preview the new level
 
     onEl.addEventListener("change", () => {
       enabled = onEl.checked;
@@ -919,6 +1089,7 @@
     // Browsers block audio until the player interacts, so start on the first tap or keypress.
     const kick = () => {
       play();
+      Sfx.unlock();
       window.removeEventListener("pointerdown", kick);
       window.removeEventListener("keydown", kick);
     };

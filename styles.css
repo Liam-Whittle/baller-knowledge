@@ -485,6 +485,47 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
 .fx-shake { animation: screenShake .45s; }
 @keyframes screenShake { 15% { transform: translate(-6px, 3px); } 30% { transform: translate(6px, -3px); } 45% { transform: translate(-4px, -2px); } 60% { transform: translate(4px, 2px); } 80% { transform: translate(-2px, 1px); } }
 
+/* ---------- Profile pictures ---------- */
+.avatar.pic { background: none; padding: 0; overflow: hidden; }
+.avatar.pic img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
+.identity { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: end; }
+.av-btn, .av-mini { position: relative; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 50%; }
+.av-btn { width: 62px; height: 62px; }
+.av-btn img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; box-shadow: 0 0 0 2px rgba(255, 210, 63, .5), 0 8px 18px -8px rgba(0, 0, 0, .7); transition: transform .2s var(--ease-pop); }
+.av-btn:hover img, .av-mini:hover .avatar { transform: scale(1.06); }
+.av-edit {
+  position: absolute; right: -2px; bottom: -2px; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font-size: .7rem; color: #2a1203;
+  background: var(--accent2); box-shadow: 0 0 0 2px var(--bg2);
+}
+.av-mini .avatar { transition: transform .2s var(--ease-pop); }
+.av-mini .av-edit { width: 16px; height: 16px; font-size: .55rem; right: -4px; bottom: -4px; }
+.modal-box.picker { width: min(640px, 100%); max-height: 92dvh; overflow: auto; gap: 16px; padding: 24px; }
+.av-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+.av-opt {
+  padding: 0; border: 0; background: none; cursor: pointer; border-radius: 50%; aspect-ratio: 1;
+  box-shadow: 0 0 0 2px transparent; transition: transform .15s var(--ease-pop), box-shadow .15s;
+}
+.av-opt img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+.av-opt:hover { transform: scale(1.07); }
+.av-opt.on { box-shadow: 0 0 0 3px var(--accent2), 0 0 18px -4px var(--accent2); }
+.picker-actions { display: flex; justify-content: flex-end; }
+.mine-row {
+  display: grid; grid-template-columns: 72px 1fr auto; align-items: center; gap: 14px;
+  padding: 12px 14px; border-radius: 16px; background: rgba(255, 255, 255, .04); border: 1px solid rgba(255, 255, 255, .07);
+}
+.mine-slot { width: 72px; height: 72px; display: grid; }
+.mine-slot .av-opt { width: 72px; }
+.av-empty { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; border: 2px dashed rgba(255, 255, 255, .2); color: var(--muted); font-size: 1.3rem; }
+.mine-text { display: grid; gap: 2px; min-width: 0; }
+.mine-text b { font-size: .92rem; }
+.mine-text span { font-size: .78rem; color: var(--muted); }
+.btn.upload { cursor: pointer; }
+@media (max-width: 480px) {
+  .modal-box.picker { padding: 18px; }
+  .av-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; }
+}
+
 /* ---------- Confirm dialog ---------- */
 .modal { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 16px; background: rgba(5, 3, 10, .7); backdrop-filter: blur(4px); animation: fadeIn .18s ease-out; }
 .modal.out { animation: fadeOut .18s ease-in forwards; }
@@ -534,6 +575,8 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
 .sound-panel { width: 240px; padding: 15px 17px; display: grid; gap: 13px; animation: popIn .25s var(--ease-pop); }
 .sound-panel[hidden] { display: none; }
 .sound-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sound-row.sub span { font-weight: 600; letter-spacing: .06em; opacity: .8; }
+.sound-sep { height: 1px; background: rgba(255, 255, 255, .07); margin: 2px 0; }
 .sound-row span { font-size: .78rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 700; }
 .switch {
   appearance: none; -webkit-appearance: none; width: 46px; height: 26px; margin: 0;
