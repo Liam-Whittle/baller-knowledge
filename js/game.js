@@ -679,14 +679,14 @@
     $("#settings").innerHTML = `
       <h2>Settings ${host ? "" : `<span class="count">host picks</span>`}</h2>
       <div class="settings-row">
-        <label class="field"><span>Rounds</span>
-          <div class="stepper"><button class="btn small" data-step="rounds:-1" ${dis}>−</button>
-          <input type="number" id="set-rounds" min="${LIMITS.rounds[0]}" max="${LIMITS.rounds[1]}" value="${s.rounds}" ${dis}>
-          <button class="btn small" data-step="rounds:1" ${dis}>+</button></div></label>
-        <label class="field"><span>Seconds per round</span>
-          <div class="stepper"><button class="btn small" data-step="timer:-5" ${dis}>−</button>
-          <input type="number" id="set-timer" min="${LIMITS.timer[0]}" max="${LIMITS.timer[1]}" value="${s.timer}" ${dis}>
-          <button class="btn small" data-step="timer:5" ${dis}>+</button></div></label>
+        <div class="field"><span>Rounds</span>
+          <div class="stepper"><button type="button" class="btn small" data-step="rounds:-1" aria-label="Fewer rounds" ${dis}>−</button>
+          <input type="number" id="set-rounds" aria-label="Rounds" min="${LIMITS.rounds[0]}" max="${LIMITS.rounds[1]}" value="${s.rounds}" ${dis}>
+          <button type="button" class="btn small" data-step="rounds:1" aria-label="More rounds" ${dis}>+</button></div></div>
+        <div class="field"><span>Seconds per round</span>
+          <div class="stepper"><button type="button" class="btn small" data-step="timer:-5" aria-label="Fewer seconds" ${dis}>−</button>
+          <input type="number" id="set-timer" aria-label="Seconds per round" min="${LIMITS.timer[0]}" max="${LIMITS.timer[1]}" value="${s.timer}" ${dis}>
+          <button type="button" class="btn small" data-step="timer:5" aria-label="More seconds" ${dis}>+</button></div></div>
       </div>
       <div class="field"><span>Categories</span>
         <div class="cats">${CATEGORIES.map((c) => `
