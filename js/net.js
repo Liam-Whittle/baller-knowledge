@@ -50,7 +50,11 @@ const Net = (() => {
     return icePromise;
   }
 
-  const peerOptions = async () => ({ config: { iceServers: await iceServers() } });
+  // Add ?relayonly to the page address to force every connection through the relay (for testing).
+  const RELAY_ONLY = new URLSearchParams(location.search).has("relayonly");
+  const peerOptions = async () => ({
+    config: { iceServers: await iceServers(), ...(RELAY_ONLY ? { iceTransportPolicy: "relay" } : {}) },
+  });
 
   function makeCode() {
     let c = "";

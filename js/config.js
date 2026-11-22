@@ -19,6 +19,6 @@
 */
 
 const NET_CONFIG = {
-  meteredCredentialsUrl: "",
+  meteredCredentialsUrl: "https://baller-knowledge.metered.live/api/v1/turn/credentials?apiKey=68362d51a8ff0357a7c5ea89e5b302e234b7",
   iceServers: [],
 };
