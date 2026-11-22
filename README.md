@@ -1,4 +1,6 @@
-# 🏀 Baller Knowledge
+# 👑 Baller Knowledge
+
+**Play:** https://liam-whittle.github.io/baller-knowledge/
 
 A multiplayer party game: everyone gets the same prompt ("Name something red in nature"),
 types as many valid answers as they can before the timer runs out, and **only each player's
