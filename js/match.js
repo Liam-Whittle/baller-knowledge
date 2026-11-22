@@ -3,16 +3,29 @@
 const Match = (() => {
   const TIER_INDEX = Object.fromEntries(TIERS.map((t, i) => [t.id, i]));
 
+  const IRREGULAR = {
+    mice: "mouse", geese: "goose", teeth: "tooth", feet: "foot", lice: "louse",
+    leaves: "leaf", knives: "knife", wolves: "wolf", loaves: "loaf", shelves: "shelf",
+    calves: "calf", halves: "half", wives: "wife", lives: "life", thieves: "thief",
+    scarves: "scarf", hooves: "hoof", elves: "elf", dwarves: "dwarf",
+    people: "person", men: "man", women: "woman", children: "child", oxen: "ox",
+    cacti: "cactus", fungi: "fungus", octopi: "octopus", octopuses: "octopus", platypuses: "platypus",
+  };
+
   function stemWord(w) {
-    if (w.length > 4 && w.endsWith("ies")) return w.slice(0, -3) + "y";
-    if (w.length > 4 && /(ches|shes|sses|xes|oes)$/.test(w)) return w.slice(0, -2);
-    if (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") && !w.endsWith("us") && !w.endsWith("is")) return w.slice(0, -1);
+    if (IRREGULAR[w]) w = IRREGULAR[w];
+    else if (w.length > 4 && w.endsWith("ies")) w = w.slice(0, -3) + "y";
+    else if (w.length > 4 && /(ches|shes|sses|xes|zes)$/.test(w)) w = w.slice(0, -2);
+    else if (w.length > 3 && w.endsWith("s") && !/(ss|us|is)$/.test(w)) w = w.slice(0, -1);
+    // Smooth over e/y endings so "shoe"/"shoes", "movie"/"movies" and "cherry"/"cherries" agree.
+    if (w.length > 3 && w.endsWith("e")) w = w.slice(0, -1);
+    if (w.length > 3 && w.endsWith("y")) w = w.slice(0, -1) + "i";
     return w;
   }
 
-  // "The Strawberries!" -> "strawberry";  "Ping-Pong" -> "pingpong"
-  function key(text) {
-    let s = String(text)
+  // Lowercase words without accents or punctuation, minus a leading "the"/"a"/"an".
+  function words(text) {
+    const s = String(text)
       .normalize("NFD").replace(/[̀-ͯ]/g, "")
       .toLowerCase()
       .replace(/&/g, " and ")
@@ -20,7 +33,12 @@ const Match = (() => {
       .replace(/[^a-z0-9]+/g, " ")
       .trim()
       .replace(/^(the|a|an) /, "");
-    return s.split(" ").filter(Boolean).map(stemWord).join("");
+    return s.split(" ").filter(Boolean);
+  }
+
+  // "The Strawberries!" -> "strawberri";  "Ping-Pong" -> "pingpong"
+  function key(text) {
+    return words(text).map(stemWord).join("");
   }
 
   function levenshtein(a, b, max) {
@@ -108,13 +126,25 @@ const Match = (() => {
     if (!k) return null;
     const hit = find(question, text);
     if (hit || k.length < 3) return hit;
+    const idx = index(question);
     let best = null, bestLen = Infinity;
-    for (const [ak, entry] of index(question).byKey) {
+    for (const [ak, entry] of idx.byKey) {
       if (ak.startsWith(k) && k.length >= Math.ceil(ak.length * AUTOFILL_MIN_SHARE) && ak.length < bestLen) {
         best = entry; bestLen = ak.length;
       }
     }
-    return best;
+    if (best) return best;
+
+    // An answer hidden inside a longer phrase: "pink rose" -> Rose, "a big brown bear" -> Brown bear.
+    // Longest run of words wins.
+    const ws = words(text).map(stemWord);
+    for (let n = ws.length - 1; n >= 1; n--) {
+      for (let i = 0; i + n <= ws.length; i++) {
+        const sub = ws.slice(i, i + n).join("");
+        if (sub.length >= 3 && idx.byKey.has(sub)) return idx.byKey.get(sub);
+      }
+    }
+    return null;
   }
 
   function tier(id) { return TIERS[TIER_INDEX[id]]; }

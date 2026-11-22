@@ -81,7 +81,7 @@ addQuestions("everyday", [
     "Bed, Baseball bat, Paper, Deck, Spoon, Cabinet, Bookshelf, Toothpick, Popsicle stick, Ladder, Boat, Log cabin, Cutting board",
     "Guitar, Violin, Piano, Chopsticks, Barrel, Canoe, Treehouse, Picture frame, Match, Bowl, Cane, Clothespin, Coffin, Crate, Pallet",
     "Rolling pin, Hockey stick, Oar, Paddle, Easel, Clogs, Totem pole, Jenga blocks, Chess pieces, Drumsticks, Broom handle, Skateboard deck, Birdhouse, Cuckoo clock, Spatula",
-    "Shingles, Rafters, Joists, Mallet, Gavel, Bobbin, Spinning wheel, Loom, Yoke, Wagon wheel, Ship's wheel, Bow (archery)/Longbow, Didgeridoo, Marimba, Abacus, Rocking horse, Totem"],
+    "Shingles, Rafters, Joists, Mallet, Gavel, Bobbin, Spinning wheel, Loom, Yoke, Wagon wheel, Ship's wheel, Longbow/Bow (archery), Didgeridoo, Marimba, Abacus, Rocking horse, Totem"],
 
   ["Name something made of glass",
     "Window, Cup/Glass, Mirror, Bottle, Jar, Light bulb",
@@ -128,7 +128,7 @@ addQuestions("everyday", [
   ["Name something that's sharp",
     "Knife, Scissors, Needle, Sword, Pencil, Razor, Thorn, Nail",
     "Teeth, Claws, Glass/Broken glass, Axe, Saw, Pin, Tack, Fork, Cactus, Fangs, Arrow, Dagger",
-    "Scalpel, Blade, Spear, Ice pick, Fish hook, Barbed wire, Shark teeth, Box cutter, Can lid, Machete, Thumbtack, Syringe, Paper (paper cut)/Paper, Icicle",
+    "Scalpel, Blade, Spear, Ice pick, Fish hook, Barbed wire, Shark teeth, Box cutter, Can lid, Machete, Thumbtack, Syringe, Paper/Paper (paper cut), Icicle",
     "Stiletto heel, Katana, Bayonet, Harpoon, Trident, Pickaxe, Awl, Skewer, Talons, Porcupine quills, Rose thorns, Sea urchin, Antlers, Grater, Peeler",
     "Guillotine, Scythe, Sickle, Lancet, Stylus, Shuriken, Caltrop, Cleaver, Chisel, Obsidian, Flint, Shrapnel, Spurs, Crampons, Ice skates, Mandoline"],
 
@@ -158,7 +158,7 @@ addQuestions("everyday", [
     "Washing machine, Dryer, Dishwasher, Toaster, Fan, Air conditioner, Vacuum, Hair dryer, Laptop, Electric car, Video game console",
     "Blender, Coffee maker, Heater, Iron, Kettle, Printer, Router/WiFi, Elevator, Escalator, Train, Traffic light, Alarm clock, Electric toothbrush, Speaker, Doorbell",
     "Electric guitar, Amplifier, Electric blanket, Space heater, Treadmill, Garage door, Security camera, Smoke detector, Water heater, Pool pump, Electric fence, Hot tub, Tram, Subway",
-    "Electric chair, Defibrillator, MRI machine, Pacemaker, Electrolysis, Electric eel (natural)/Electric eel, Tesla coil, Electron microscope, Particle accelerator, Server farm, Data center, Electroplating, Arc welder, Neon sign"],
+    "Electric chair, Defibrillator, MRI machine, Pacemaker, Electrolysis, Electric eel/Electric eel (natural), Tesla coil, Electron microscope, Particle accelerator, Server farm, Data center, Electroplating, Arc welder, Neon sign"],
 
   ["Name something that runs on batteries",
     "Remote, Phone, Flashlight, Toy, Laptop, Watch, Clock",
@@ -170,7 +170,7 @@ addQuestions("everyday", [
   ["Name something that has a screen",
     "TV, Phone, Computer, Laptop, Tablet/iPad, Monitor",
     "Smartwatch, Calculator, Camera, Microwave, ATM, Game console/Nintendo Switch, Movie theater, Kindle/E-reader, GPS",
-    "Car dashboard, Vending machine, Self-checkout, Fridge (smart)/Smart fridge, Projector screen, Treadmill, Digital clock, Billboard, Thermostat, Cash register, Ultrasound, Baby monitor, Game Boy",
+    "Car dashboard, Vending machine, Self-checkout, Smart fridge/Fridge (smart), Projector screen, Treadmill, Digital clock, Billboard, Thermostat, Cash register, Ultrasound, Baby monitor, Game Boy",
     "Window screen, Door screen/Screen door, Fireplace screen, Airplane seat, Arcade machine, Jumbotron, Fitness tracker, Drone controller, Oscilloscope, Radar, Sonar, Heart monitor, Point of sale",
-    "Teleprompter, Pager, Tamagotchi, Etch A Sketch, Viewfinder, Periscope, Planetarium dome, Smart mirror, Pinball machine, Dashcam, Cockpit display, Sewing machine, Kiosk, Slot machine, Sunscreen (SPF)/Sunscreen"]
+    "Teleprompter, Pager, Tamagotchi, Etch A Sketch, Viewfinder, Periscope, Planetarium dome, Smart mirror, Pinball machine, Dashcam, Cockpit display, Sewing machine, Kiosk, Slot machine, Sunscreen/Sunscreen (SPF)"]
 ]);

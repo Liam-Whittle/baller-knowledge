@@ -13,6 +13,7 @@
   const DEFAULT_SETTINGS = () => ({ rounds: 10, timer: 20, categories: CATEGORIES.map((c) => c.id) });
   const COUNTDOWN_MS = 3000;
   const GRACE_MS = 1000;
+  const NEXT_LOCK_MS = 3000; // results stay up at least this long before "Next round" unlocks
 
   const questionOf = (ref) => {
     const c = ref && CATEGORIES.find((c) => c.id === ref.catId);
@@ -783,12 +784,31 @@
           </section>` : ""}
         <div class="actions">
           ${isHost()
-            ? `<button class="btn primary big" data-act="next">${last ? "See final results 🏆" : "Next round →"}</button>`
+            ? `<button class="btn primary big" data-act="next" id="next-btn" disabled>${last ? "See final results 🏆" : "Next round →"}</button>`
             : `<p class="hint pulse">Waiting for the host…</p>`}
         </div>
       </main>`;
 
     Sfx.play("reveal");
+
+    // Give everyone a few seconds to read the results before the host can move on.
+    const nextBtn = $("#next-btn");
+    if (nextBtn) {
+      const label = nextBtn.textContent;
+      const until = Date.now() + NEXT_LOCK_MS;
+      const lockTick = () => {
+        if (!document.body.contains(nextBtn)) return;
+        const left = Math.ceil((until - Date.now()) / 1000);
+        if (left > 0) {
+          nextBtn.textContent = `${label} (${left})`;
+          setTimeout(lockTick, 200);
+        } else {
+          nextBtn.textContent = label;
+          nextBtn.disabled = false;
+        }
+      };
+      lockTick();
+    }
     // Count each player's points up as their card lands, with sparkles for the rare picks.
     app.querySelectorAll(".gain").forEach((el) => {
       const delay = parseInt(el.style.getPropertyValue("--d"), 10) || 0;
