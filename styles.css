@@ -655,7 +655,7 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 
 /* ---------- Mobile ---------- */
 @media (max-width: 720px) {
   .lobby-grid, .round-grid { grid-template-columns: 1fr; }
-  .side { order: 2; }
+  .side-col { order: 2; }
   .settings-row { grid-template-columns: 1fr; }
   .cd-n { font-size: 6rem; }
 }
@@ -686,3 +686,112 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 
 .ai-msg { min-height: 1.2em; font-size: .88rem; margin: 0 !important; }
 .ai-msg.bad { color: var(--bad); }
 .btn.danger-text { color: var(--bad); margin-right: auto; }
+
+/* ---------- Power-ups ---------- */
+.pu-line {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; column-gap: 12px; row-gap: 12px;
+  margin-top: 14px; padding: 14px; border-radius: 14px; background: var(--bg2); border: 1px solid var(--line);
+  cursor: pointer; transition: border-color .2s, background .2s;
+}
+.pu-line.on { border-color: color-mix(in srgb, var(--accent2) 50%, transparent); background: color-mix(in srgb, var(--accent2) 6%, var(--bg2)); }
+.pu-line:has(input:disabled) { cursor: default; }
+.pu-badge {
+  width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; font-size: 1.15rem;
+  background: rgba(255, 255, 255, .05); border: 1px solid var(--line); filter: grayscale(1); opacity: .6; transition: filter .2s, opacity .2s, background .2s;
+}
+.pu-line.on .pu-badge { filter: none; opacity: 1; background: color-mix(in srgb, var(--accent2) 16%, transparent); border-color: color-mix(in srgb, var(--accent2) 45%, transparent); }
+.pu-text { display: grid; gap: 1px; }
+.pu-text small { color: var(--muted); font-size: .8rem; }
+.pu-list { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+.pu-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 7px; border-radius: 99px;
+  font-size: .76rem; font-weight: 700; color: var(--muted); background: rgba(255, 255, 255, .04); border: 1px solid rgba(255, 255, 255, .07);
+  transition: color .2s;
+}
+.pu-chip i { font-style: normal; font-size: .9rem; }
+.pu-line:not(.on) .pu-chip i { filter: grayscale(1); opacity: .6; }
+.pu-line.on .pu-chip { color: var(--text); }
+
+.side-col { display: grid; gap: 14px; align-content: start; }
+.powers-card h3 { margin-bottom: 10px; }
+.powers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.pu {
+  display: grid; justify-items: center; gap: 5px; padding: 11px 4px 9px; border-radius: 14px; cursor: pointer;
+  font: inherit; font-size: .74rem; font-weight: 800; color: var(--text);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent2) 16%, var(--bg2)), var(--bg2));
+  border: 1px solid color-mix(in srgb, var(--accent2) 45%, transparent);
+  box-shadow: 0 4px 14px -8px rgba(255, 210, 63, .5);
+  transition: transform .15s var(--ease-pop), border-color .2s, box-shadow .2s, opacity .2s;
+}
+.pu-ico { font-size: 1.55rem; line-height: 1; transition: transform .2s var(--ease-pop); }
+.pu-name { white-space: nowrap; }
+.pu:not(:disabled):hover { transform: translateY(-3px); border-color: var(--accent2); box-shadow: 0 8px 20px -8px rgba(255, 210, 63, .7); }
+.pu:not(:disabled):hover .pu-ico { transform: scale(1.12) rotate(-6deg); }
+.pu:disabled { cursor: default; opacity: .6; box-shadow: none; }
+.pu.used { opacity: .35; background: rgba(255, 255, 255, .03); border-color: rgba(255, 255, 255, .08); color: var(--muted); }
+.pu.used .pu-ico { filter: grayscale(1); }
+.pu.armed { opacity: 1; border-color: var(--good); background: linear-gradient(180deg, color-mix(in srgb, var(--good) 22%, var(--bg2)), var(--bg2)); color: var(--good); box-shadow: 0 0 16px -4px var(--good); animation: pulse 1.6s ease-in-out infinite; }
+.pu-desc { margin: 10px 0 0; font-size: .76rem; color: var(--muted); text-align: center; min-height: 1.2em; }
+.pu-tag { font-style: normal; font-size: .8rem; margin-left: 3px; }
+.rnote.steal { color: var(--good); }
+.rnote.stolen { color: var(--bad); }
+.wait-turns { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 16px; background: rgba(5, 3, 10, .6); backdrop-filter: blur(3px); animation: fadeIn .2s ease-out; }
+.wait-turns[hidden] { display: none; }
+.wait-box { display: grid; justify-items: center; gap: 8px; padding: 24px 28px; text-align: center; animation: popIn .25s var(--ease-pop); }
+.wait-box b { font-size: 1.1rem; }
+.wait-box small { color: var(--muted); font-size: .88rem; }
+.wait-spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .12); border-top-color: var(--accent2); animation: spin .9s linear infinite; }
+
+/* ---------- Phones (only below 720px; the desktop layout is untouched) ---------- */
+@media (max-width: 720px) {
+  /* Never let content push the page wider than the screen. */
+  body { overflow-x: clip; }
+  main { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)); }
+  .lobby, .lobby-grid, .round-grid, .side-col { grid-template-columns: minmax(0, 1fr); }
+  .card { padding: 16px; }
+  .cats { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .cat { min-width: 0; padding: 9px 12px; }
+  .cat .cname { min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .cat .cname small { white-space: nowrap; }
+  .stepper input { min-width: 0; flex: 1; }
+
+  /* Topbar: one tidy line. The room code is on the lobby card, so the pill can go. */
+  .topbar { flex-wrap: nowrap; gap: 6px; margin-bottom: 12px; }
+  .topbar .pill.ghost { display: none; }
+  .topbar .pill { padding: 5px 10px; font-size: .72rem; white-space: nowrap; }
+  .topbar > * { flex-shrink: 0; }
+  .topbar .cat-pill { flex-shrink: 1; min-width: 34px; overflow: hidden; text-overflow: ellipsis; }
+  .topbar .btn.small { padding: 6px 12px; }
+  .brand { font-size: .88rem; }
+  .brand img { width: 26px; }
+
+  /* Round: keep the timer in view while typing, and the power-ups near the answer box. */
+  .round .timer { position: sticky; top: 8px; z-index: 20; height: 34px; margin-bottom: 14px; background: #0c0716; box-shadow: inset 0 2px 8px rgba(0, 0, 0, .5), 0 6px 18px -6px rgba(5, 3, 10, .9); }
+  /* Flatten the two columns so the power-ups sit right under the answer box, and your
+     growing answer list and the "Answers so far" card come after them. */
+  .round-grid { display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+  .round-grid .play, .round-grid .side-col { display: contents; }
+  .round-grid .powers-card { order: 1; margin: 2px 0 14px; padding: 12px 14px; }
+  .powers-card h3 { margin: 0 0 8px; }
+  .pu { grid-template-columns: auto auto; justify-content: center; align-items: center; gap: 6px; padding: 10px 4px; }
+  .pu-ico { font-size: 1.2rem; }
+  .pu-desc { display: none; }
+  .round-grid .best, .round-grid .my-answers { order: 2; }
+  .round-grid .side:not(.powers-card) { order: 3; margin-top: 18px; }
+  .prompt { font-size: clamp(1.3rem, 6vw, 1.7rem); }
+  .feedback { margin: 8px 0 4px; }
+
+  /* Popups scroll inside themselves on short screens instead of running off the bottom. */
+  .modal { padding: 12px; }
+  .modal-box { max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain; }
+  .modal-box.how-box { padding: 18px; }
+
+  /* Snappier taps: no double-tap zoom delay or grey flash on buttons. */
+  button, .btn, a, label, input { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  /* Keep the corner buttons clear of the iPhone home bar. */
+  .sound { bottom: calc(12px + env(safe-area-inset-bottom)); right: 12px; }
+  .info-btn { bottom: calc(12px + env(safe-area-inset-bottom)); right: 66px; }
+
+  .room-card { gap: 12px; }
+  .room-card .btn { width: 100%; }
+}

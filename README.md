@@ -22,6 +22,11 @@ Each prompt shows one Common answer as a hint. On top of that:
 - **Bonus rounds:** every 5th round (never the last) is multiple choice. You pick one of 6 answers of mixed
   rarity, and that pick is your score.
 - **Final round:** your scoring answer is worth ×1.5.
+- **Power-ups** (switch on "Add power-ups" in the lobby): everyone gets three one-time power-ups per game,
+  not usable in bonus rounds.
+  - ⏱️ **+7 seconds:** extra time just for you. Anyone whose time has run out sees "Waiting for player turns…".
+  - 🎁 **Free Rare:** adds a random Rare answer to your list.
+  - 🦝 **Steal:** when time's up, you take a random rival's top answer. If nobody has an answer, you keep the Steal.
 
 These numbers are constants at the top of [`js/game.js`](js/game.js).
 

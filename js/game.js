@@ -10,7 +10,7 @@
   };
 
   const LIMITS = { rounds: [1, 30], timer: [5, 120] };
-  const DEFAULT_SETTINGS = () => ({ rounds: 10, timer: 20, categories: CATEGORIES.map((c) => c.id) });
+  const DEFAULT_SETTINGS = () => ({ rounds: 10, timer: 20, categories: CATEGORIES.map((c) => c.id), powerups: false });
   const COUNTDOWN_MS = 3000;
   const GRACE_MS = 1000;
   const NEXT_LOCK_MS = 3000; // results stay up at least this long before "Next round" unlocks
@@ -24,6 +24,17 @@
   const BONUS_OPTIONS = 6;
   const BONUS_SECONDS = 7;     // bonus rounds are quick-fire, whatever the lobby's timer is
   const isBonusRound = (round, total) => round % BONUS_EVERY === 0 && round < total;
+
+  // Power-ups (a lobby option): each player gets one of each per game. Not usable in bonus rounds.
+  const POWER_SECONDS = 7;
+  const POWERS = [
+    { id: "time", icon: "⏱️", name: `+${POWER_SECONDS} seconds`, short: `+${POWER_SECONDS}s`, desc: `${POWER_SECONDS} extra seconds, just for you` },
+    { id: "rare", icon: "🎁", name: "Free Rare", short: "Free Rare", desc: "Adds a random Rare answer to your list" },
+    { id: "steal", icon: "🦝", name: "Steal", short: "Steal", desc: "When time's up, take a random rival's top answer" },
+  ];
+  const freshPowers = () => Object.fromEntries(POWERS.map((x) => [x.id, true]));
+  const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const pickOne = (list) => list[Math.floor(Math.random() * list.length)];
 
   const questionOf = (ref) => {
     const c = ref && CATEGORIES.find((c) => c.id === ref.catId);
@@ -178,8 +189,11 @@
     };
 
     // Replies to one player (the host's own messages are handled right here).
-    const reply = (id, msg) => (id === "host" ? onVerdict(msg) : net.send(id, msg));
+    const reply = (id, msg) => (id === "host" ? onPrivate(msg) : net.send(id, msg));
     hs.players.set("host", { id: "host", name: cleanName(name), avatar: cleanAvatar(avatarValue), score: 0, connected: true, answers: [] });
+    // Each player's own end time: the round's, plus any extra seconds from a power-up.
+    const pEnd = (p) => hs.endAt + (p.extra || 0);
+    const roundEnd = () => Math.max(hs.endAt, ...[...hs.players.values()].map(pEnd));
 
     // Uploaded photos are big-ish, so they travel in their own message only when one
     // changes or someone joins, instead of inside every state update.
@@ -221,7 +235,8 @@
             hs.players.delete(old.id);
             p = { ...old, id, connected: true, avatar: cleanAvatar(msg.avatar) || old.avatar };
           } else {
-            p = { id, name: uniqueName(n), avatar: cleanAvatar(msg.avatar), score: 0, connected: true, answers: [] };
+            p = { id, name: uniqueName(n), avatar: cleanAvatar(msg.avatar), score: 0, connected: true, answers: [],
+              powers: hs.phase !== "lobby" && hs.settings.powerups ? freshPowers() : {} };
           }
           hs.players.set(id, p);
           net.send(id, { t: "welcome", you: id, roundId: hs.phase === "round" ? hs.startAt : null, answers: p.answers });
@@ -241,7 +256,7 @@
         case "answer": {
           const p = hs.players.get(id);
           const now = Date.now();
-          if (!p || hs.options || hs.phase !== "round" || now < hs.startAt - 250 || now > hs.endAt + GRACE_MS) return;
+          if (!p || hs.options || hs.phase !== "round" || now < hs.startAt - 250 || now > pEnd(p) + GRACE_MS) return;
           const e = Match.exact(questionOf(hs.ref), msg.text);
           if (!e || p.answers.some((a) => a.display === e.display)) return;
           p.answers.push({ display: e.display, tier: e.tier });
@@ -252,7 +267,7 @@
           // An answer that isn't in the dictionary: ask the AI judge (using the host's key).
           const p = hs.players.get(id);
           const now = Date.now();
-          if (!p || hs.options || hs.phase !== "round" || now < hs.startAt - 250 || now > hs.endAt + GRACE_MS) return;
+          if (!p || hs.options || hs.phase !== "round" || now < hs.startAt - 250 || now > pEnd(p) + GRACE_MS) return;
           const nonce = String(msg.nonce || "").slice(0, 20);
           const text = String(msg.text || "").replace(/\s+/g, " ").trim().slice(0, 60);
           if (!text) return;
@@ -297,6 +312,35 @@
           if (!checkAllDone()) publish();
           break;
         }
+        case "power": {
+          // One-time power-ups. A refused one (nothing to give) isn't used up.
+          const p = hs.players.get(id);
+          const now = Date.now();
+          const kind = String(msg.kind || "");
+          if (!p || !p.powers || !p.powers[kind] || hs.options || hs.phase !== "round" || hs.aiWaiting || p.done || now < hs.startAt || now > pEnd(p)) return;
+          let answer = null;
+          if (kind === "time") {
+            p.extra = (p.extra || 0) + POWER_SECONDS * 1000;
+            clearTimeout(hs.timer);
+            hs.timer = setTimeout(endRound, roundEnd() - Date.now() + GRACE_MS);
+          } else if (kind === "rare") {
+            const have = new Set(p.answers.map((a) => Match.key(a.display)));
+            const left = Match.index(questionOf(hs.ref)).entries.filter((e) => !have.has(Match.key(e.display)));
+            // Rare if there is one; otherwise the closest tier that has something left.
+            let pool = [];
+            for (const t of ["rare", "elite", "uncommon", "omniscient", "common"]) if ((pool = left.filter((e) => e.tier === t)).length) break;
+            if (!pool.length) return reply(id, { t: "power", kind, ok: false });
+            const e = pickOne(pool);
+            answer = { display: e.display, tier: e.tier, gift: true };
+            p.answers.push(answer);
+          } else if (kind === "steal") {
+            p.stealArmed = true;
+          } else return;
+          p.powers[kind] = false;
+          reply(id, { t: "power", kind, ok: true, answer });
+          publish();
+          break;
+        }
         case "settings": {
           if (!isHost || hs.phase !== "lobby") return;
           const s = msg.settings;
@@ -305,13 +349,14 @@
             rounds: clamp(s.rounds, LIMITS.rounds),
             timer: clamp(s.timer, LIMITS.timer),
             categories: cats.length ? cats : hs.settings.categories,
+            powerups: !!s.powerups,
           };
           publish();
           break;
         }
         case "start":
           if (!isHost || hs.phase !== "lobby") return;
-          for (const p of hs.players.values()) p.score = 0;
+          for (const p of hs.players.values()) { p.score = 0; p.powers = hs.settings.powerups ? freshPowers() : {}; }
           hs.round = 0;
           hs.totalRounds = hs.settings.rounds;
           nextRound();
@@ -343,6 +388,7 @@
             if (!p.connected) hs.players.delete(pid);
             p.score = 0;
             p.answers = [];
+            p.powers = {};
           }
           publish();
           break;
@@ -353,7 +399,9 @@
     function checkAllDone() {
       if (hs.phase !== "round") return false;
       const here = [...hs.players.values()].filter((p) => p.connected);
-      if (here.length && here.every((p) => p.done)) { endRound(); return true; }
+      // Someone whose own time has run out counts as done (others may still be on extra time).
+      const now = Date.now();
+      if (here.length && here.every((p) => p.done || now > pEnd(p))) { endRound(); return true; }
       return false;
     }
 
@@ -373,12 +421,11 @@
       hs.used.add(`${hs.ref.catId}:${hs.ref.qi}`);
       hs.round++;
       const entries = Match.index(questionOf(hs.ref)).entries;
-      const pickOne = (list) => list[Math.floor(Math.random() * list.length)];
       const commons = entries.filter((e) => e.tier === "common");
       hs.options = isBonusRound(hs.round, hs.totalRounds) ? bonusOptions(entries) : null;
       // No hint in a bonus round: it would give away a Common option.
       hs.hint = !hs.options && commons.length ? pickOne(commons).display : null;
-      for (const p of hs.players.values()) { p.answers = []; p.done = false; p.aiAsks = 0; }
+      for (const p of hs.players.values()) { p.answers = []; p.done = false; p.aiAsks = 0; p.extra = 0; p.stealArmed = false; }
       hs.startAt = Date.now() + COUNTDOWN_MS;
       hs.aiPend = { round: hs.startAt, n: 0 };
       hs.aiWaiting = false;
@@ -392,7 +439,6 @@
 
     // Six options for a bonus round: one from every tier, then random extras, shuffled.
     function bonusOptions(entries) {
-      const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
       const chosen = [];
       for (const t of TIERS) {
         const inTier = entries.filter((e) => e.tier === t.id);
@@ -421,10 +467,31 @@
       const q = questionOf(hs.ref);
       const final = hs.round === hs.totalRounds;
       const leader = Math.max(0, ...[...hs.players.values()].map((p) => p.score)); // scores before this round
+      const byRank = (a, b) => Match.rank(b.tier) - Match.rank(a.tier);
+
+      // Steal power-ups: each thief (in random order) takes a random rival's current top answer.
+      const notes = new Map();
+      const note = (pid, n) => { if (!notes.has(pid)) notes.set(pid, []); notes.get(pid).push(n); };
+      for (const t of shuffle([...hs.players.values()].filter((p) => p.stealArmed))) {
+        t.stealArmed = false;
+        const victims = [...hs.players.values()].filter((v) => v !== t && v.answers.length);
+        if (!victims.length) {
+          t.powers.steal = true; // nothing to take, so they keep it
+          note(t.id, { k: "steal", text: "Nothing to steal (Steal kept)" });
+          continue;
+        }
+        const v = pickOne(victims);
+        const top = [...v.answers].sort(byRank)[0];
+        v.answers = v.answers.filter((a) => a !== top);
+        if (!t.answers.some((a) => a.display === top.display)) t.answers.push({ ...top, gift: false, stolen: v.name });
+        note(t.id, { k: "steal", text: `🦝 Stole ${top.display} from ${v.name}` });
+        note(v.id, { k: "stolen", text: `${top.display} stolen by ${t.name}` });
+      }
+
       const results = [];
       const said = new Set();
       for (const p of hs.players.values()) {
-        const answers = [...p.answers].sort((a, b) => Match.rank(b.tier) - Match.rank(a.tier));
+        const answers = [...p.answers].sort(byRank);
         answers.forEach((a) => { if (!a.ai) said.add(a.display); });
         results.push({ id: p.id, name: p.name, answers, best: answers[0] || null, before: p.score });
       }
@@ -433,7 +500,7 @@
       for (const r of results) if (r.best) { const k = Match.key(r.best.display); shared.set(k, (shared.get(k) || 0) + 1); }
 
       for (const r of results) {
-        r.notes = [];
+        r.notes = notes.get(r.id) || [];
         r.points = 0;
         if (!r.best) continue;
         const base = Match.tier(r.best.tier).points;
@@ -471,6 +538,7 @@
         totalRounds: hs.phase === "lobby" ? hs.settings.rounds : hs.totalRounds,
         players: [...hs.players.values()].map((p) => ({
           id: p.id, name: p.name, avatar: p.avatar && p.avatar.startsWith("data:") ? "custom" : p.avatar || "", score: p.score, connected: p.connected, count: p.answers.length, done: !!p.done,
+          powers: POWERS.filter((x) => p.powers && p.powers[x.id]).map((x) => x.id), extraMs: p.extra || 0, armed: !!p.stealArmed,
         })),
         question: q ? {
           ...hs.ref, prompt: q.prompt, catName: cat.name, emoji: cat.emoji, hint: hs.hint,
@@ -515,8 +583,8 @@
           view.avatars = msg.map || {};
         } else if (msg.t === "state") {
           onState(msg.state);
-        } else if (msg.t === "verdict") {
-          onVerdict(msg);
+        } else if (msg.t === "verdict" || msg.t === "power") {
+          onPrivate(msg);
         }
       },
       onClose() { if (session === s) showEnded("The host left the game."); },
@@ -573,7 +641,8 @@
     const tier = Match.tier(t);
     return `<span class="tier" data-t="${t}" style="--c:${tier.color}">${esc(tier.name)}${extra}</span>`;
   };
-  const chip = (a, cls = "") => `<span class="chip ${cls}" data-t="${a.tier}" style="--c:${Match.tier(a.tier).color}">${esc(a.display)}${a.ai ? `<i class="ai-tag" title="Judged by AI">AI</i>` : ""}</span>`;
+  const powerTag = (a) => (a.gift ? `<i class="pu-tag" title="Free Rare power-up">🎁</i>` : a.stolen ? `<i class="pu-tag" title="Stolen from ${esc(a.stolen)}">🦝</i>` : "");
+  const chip = (a, cls = "") => `<span class="chip ${cls}" data-t="${a.tier}" style="--c:${Match.tier(a.tier).color}">${esc(a.display)}${a.ai ? `<i class="ai-tag" title="Judged by AI">AI</i>` : ""}${powerTag(a)}</span>`;
   const words = (text) => esc(text).split(" ").map((w, i) => `<span class="w" style="--i:${i}">${w}</span>`).join(" ");
 
   // Draws a player's picture: their preset or upload, falling back to a coloured initial.
@@ -729,7 +798,7 @@
         ${p.id === "host" ? `<span class="tag host">👑 host</span>` : ""}${p.id === session.me ? `<span class="tag you">you</span>` : ""}</li>`).join("");
     state.players.forEach((p) => view.seen.add(p.id));
     // Don't yank a number box out from under the host while they're typing in it.
-    const typing = document.activeElement && document.activeElement.matches("#settings input");
+    const typing = document.activeElement && document.activeElement.matches("#settings input[type=number]");
     if (!typing) renderSettings();
     $("#lobby-actions").innerHTML = isHost()
       ? `<button class="btn primary big" data-act="start">Start game</button>
@@ -762,6 +831,12 @@
             <span class="tick" aria-hidden="true"></span></button>`).join("")}</div>
       </div>
       ${qCount < s.rounds ? `<p class="hint">Only ${qCount} questions picked, so some will repeat.</p>` : ""}
+      <label class="pu-line ${s.powerups ? "on" : ""}">
+        <span class="pu-badge" aria-hidden="true">⚡</span>
+        <span class="pu-text"><b>Power-ups</b><small>One of each per player, per game</small></span>
+        <input type="checkbox" class="switch" id="set-powerups" aria-label="Power-ups" ${s.powerups ? "checked" : ""} ${dis}>
+        <span class="pu-list">${POWERS.map((x) => `<span class="pu-chip" title="${esc(x.desc)}"><i aria-hidden="true">${x.icon}</i>${esc(x.short)}</span>`).join("")}</span>
+      </label>
       <div class="ai-line ${state.ai ? "on" : ""}">
         <span class="ai-dot" aria-hidden="true"></span>
         <span><b>AI judge ${state.ai ? "on" : "off"}</b><small>${state.ai
@@ -882,12 +957,19 @@
             <h2 class="prompt" id="prompt">${words(q.prompt)}</h2>
             ${play}
           </section>
-          <aside class="card side">
-            <h3>${q.bonus ? "Picked" : "Answers so far"}</h3>
-            <ul class="players compact" id="counts"></ul>
-            ${q.bonus ? "" : `<button class="btn wide" id="done-btn" data-act="done" disabled>I'm done</button>`}
-            <p class="hint small-hint" id="done-hint">${q.bonus ? "The round ends when everyone has picked or the timer runs out." : "The round ends when the timer runs out or everyone is done."}</p>
-          </aside>
+          <div class="side-col">
+            <aside class="card side">
+              <h3>${q.bonus ? "Picked" : "Answers so far"}</h3>
+              <ul class="players compact" id="counts"></ul>
+              ${q.bonus ? "" : `<button class="btn wide" id="done-btn" data-act="done" disabled>I'm done</button>`}
+              <p class="hint small-hint" id="done-hint">${q.bonus ? "The round ends when everyone has picked or the timer runs out." : "The round ends when the timer runs out or everyone is done."}</p>
+            </aside>
+            ${state.settings.powerups && !q.bonus ? `<section class="card side powers-card">
+              <h3>Power-ups</h3>
+              <div class="powers" id="powers"></div>
+              <p class="pu-desc" id="pu-desc">One use each per game</p>
+            </section>` : ""}
+          </div>
         </div>
       </main>
       <div class="countdown" id="countdown">
@@ -895,6 +977,9 @@
           <div class="cd-cat">${q.emoji} ${esc(q.catName)}</div>
           ${special}
           <div class="cd-num" id="cdnum"></div>
+      </div>
+      <div class="wait-turns" id="wait-turns" hidden>
+        <div class="card wait-box"><span class="wait-spin" aria-hidden="true"></span><b>Waiting for player turns…</b><small id="wait-who"></small></div>
       </div>`;
 
     const input = $("#ans");
@@ -908,6 +993,8 @@
     view.started = false;
     view.lastCd = null;
     view.lastSec = null;
+    view.powerBusy = false;
+    view.waitText = null;
     renderMine();
     if (q.bonus && view.myAnswers.length) showPicked(view.myAnswers[0].display);
     updateRound();
@@ -1038,6 +1125,61 @@
     renderMine();
   }
 
+  // Messages meant only for this player: AI verdicts and power-up results.
+  function onPrivate(msg) {
+    if (msg.t === "power") onPower(msg);
+    else onVerdict(msg);
+  }
+
+  // This player's own end time: the round's, plus any extra seconds they've bought.
+  const myEnd = () => view.endLocal + ((me() && me().extraMs) || 0);
+
+  function usePower(kind) {
+    const m = me();
+    if (view.powerBusy || view.iAmDone || !view.started || Date.now() >= myEnd() || !m || !m.powers.includes(kind)) return;
+    view.powerBusy = true;
+    session.send({ t: "power", kind });
+    renderPowers();
+  }
+
+  function onPower(msg) {
+    view.powerBusy = false;
+    if (!$("#ans")) return;
+    if (!msg.ok) {
+      feedback("No answers left to give you, so you keep your Free Rare.", "meh", 2600);
+      renderPowers();
+      return;
+    }
+    const btn = $(`[data-power="${msg.kind}"]`);
+    const r = btn ? btn.getBoundingClientRect() : null;
+    if (msg.kind === "rare" && msg.answer) {
+      addMine({ display: String(msg.answer.display), tier: msg.answer.tier, gift: true });
+    } else if (msg.kind === "time") {
+      feedback(`⏱️ +${POWER_SECONDS} seconds!`, "good");
+      Sfx.play("go");
+      if (r) Fx.floatText(r.left + r.width / 2, r.top, `+${POWER_SECONDS}s`, "#ffc42e");
+    } else if (msg.kind === "steal") {
+      feedback("🦝 Steal armed! When time's up you take a random rival's top answer.", "ask", 3200);
+      Sfx.play("go");
+    }
+    if (r) Fx.burst(r.left + r.width / 2, r.top + r.height / 2, "#ffc42e", 14, 4);
+    renderPowers();
+  }
+
+  function renderPowers() {
+    const el = $("#powers");
+    const m = me();
+    if (!el || !m) return;
+    const live = view.started && !view.iAmDone && !view.powerBusy && Date.now() < myEnd();
+    el.innerHTML = POWERS.map((x) => {
+      const has = m.powers.includes(x.id);
+      const armed = x.id === "steal" && m.armed;
+      const cls = armed ? "armed" : has ? "" : "used";
+      return `<button type="button" class="pu ${cls}" data-power="${x.id}" data-desc="${esc(x.desc)}" title="${esc(x.name)}: ${esc(x.desc)}" ${has && live ? "" : "disabled"}>
+        <span class="pu-ico" aria-hidden="true">${x.icon}</span><span class="pu-name">${armed ? "Armed" : has ? esc(x.short) : "Used"}</span></button>`;
+    }).join("");
+  }
+
   // The host's AI judge has answered one of our checks.
   function onVerdict(msg) {
     if (!view.aiPending.has(msg.nonce)) return;
@@ -1074,7 +1216,7 @@
     bestEl.style.setProperty("--c", best ? Match.tier(best.tier).color : "var(--line)");
     if (newBest) { bestEl.classList.remove("bump"); void bestEl.offsetWidth; bestEl.classList.add("bump"); }
     bestEl.innerHTML = best
-      ? `<span class="label">Your scoring answer</span> <b>${esc(best.display)}</b>${best.ai ? ` <i class="ai-tag">AI</i>` : ""} ${tierBadge(best.tier, ` · ${Match.tier(best.tier).points} pts`)}`
+      ? `<span class="label">Your scoring answer</span> <b>${esc(best.display)}</b>${best.ai ? ` <i class="ai-tag">AI</i>` : ""}${powerTag(best)} ${tierBadge(best.tier, ` · ${Match.tier(best.tier).points} pts`)}`
       : `<span class="label">No answers yet. Go for the rare ones!</span>`;
     $("#mine").innerHTML = sorted.map((a) => `<li class="${a.display === fresh ? "pop" : ""}">${chip(a, a === best ? "best" : "")}</li>`).join("")
       + [...view.aiPending.values()].map((t) => `<li><span class="chip pending" title="The AI judge is checking this">${esc(t)}<i class="ai-tag">AI…</i></span></li>`).join("");
@@ -1091,6 +1233,7 @@
     if (view.iAmDone && $("#done-hint")) {
       $("#done-hint").textContent = waiting ? `Waiting for ${waiting} more player${waiting === 1 ? "" : "s"}…` : "Ending round…";
     }
+    renderPowers();
   }
 
   function markDone() {
@@ -1113,7 +1256,7 @@
   function tickRound() {
     const now = Date.now();
     const secs = state.question.bonus ? BONUS_SECONDS : state.settings.timer;
-    const total = secs * 1000;
+    const total = secs * 1000 + ((me() && me().extraMs) || 0);
     const cd = $("#countdown");
     const input = $("#ans");
     if (!cd) return clearInterval(view.tick);
@@ -1146,13 +1289,15 @@
           $("#ans-btn").disabled = false;
           $("#done-btn").disabled = false;
           input.focus();
+          renderPowers();
         } else {
           app.querySelectorAll(".mc-opt").forEach((b) => (b.disabled = false));
         }
       }
     }
-    const left = Math.max(0, view.endLocal - now);
+    const left = Math.max(0, myEnd() - now);
     const sec = Math.ceil(left / 1000);
+    updateWaiting(now, left);
     const low = left < 5000 && left > 0;
     $("#tfill").style.width = `${(left / total) * 100}%`;
     $("#tfill").classList.toggle("low", low);
@@ -1180,7 +1325,19 @@
       $("#done-btn").disabled = true;
       input.placeholder = "Time's up! Tallying…";
       input.value = "";
+      renderPowers();
     }
+  }
+
+  // Once your own time is up (or you're done), show who is still playing on extra time.
+  function updateWaiting(now, left) {
+    const el = $("#wait-turns");
+    if (!el) return;
+    const others = state.players.filter((p) => p.id !== session.me && p.connected && !p.done && p.extraMs > 0 && now < view.endLocal + p.extraMs);
+    const show = now >= view.endLocal && (left <= 0 || view.iAmDone) && others.length > 0;
+    const text = show ? others.map((p) => `${p.name} has ${Math.ceil((view.endLocal + p.extraMs - now) / 1000)}s left`).join(" · ") : null;
+    el.hidden = !show;
+    if (text !== view.waitText) { view.waitText = text; $("#wait-who").textContent = text || ""; }
   }
 
   // ---------- Reveal ----------
@@ -1209,7 +1366,7 @@
                 <div class="rmain">
                   <div class="rname">${esc(p.name)}${p.id === session.me ? `<span class="you">you</span>` : ""}</div>
                   ${p.best
-                    ? `<div class="rpick"><b>${esc(p.best.display)}</b>${p.best.ai ? `<i class="ai-tag" title="Judged by AI">AI</i>` : ""}${tierBadge(p.best.tier)}</div>`
+                    ? `<div class="rpick"><b>${esc(p.best.display)}</b>${p.best.ai ? `<i class="ai-tag" title="Judged by AI">AI</i>` : ""}${powerTag(p.best)}${tierBadge(p.best.tier)}</div>`
                     : `<div class="rpick none">${r.options ? "No pick" : "No answers"}</div>`}
                   ${p.notes && p.notes.length ? `<div class="rnotes">${p.notes.map((n) => `<span class="rnote ${n.k}">${esc(n.text)}</span>`).join("")}</div>` : ""}
                   ${p.answers.length > 1 ? `<div class="ralso">Also: ${p.answers.slice(1).map((a) => esc(a.display) + (a.ai ? ` <i class="ai-tag">AI</i>` : "")).join(", ")}</div>` : ""}
@@ -1313,6 +1470,7 @@
           <li><span class="n">3</span><span>Only your <b class="gold">rarest answer</b> scores.</span></li>
           <li><span class="n">4</span><span>Same answer as someone else? You both get <b>half</b>. Behind? Rare-or-better answers get a <b>comeback boost</b>.</span></li>
           <li><span class="n">5</span><span>Every 5th round is a <b>multiple-choice bonus</b> with ${BONUS_SECONDS} seconds to pick, and the last round is worth <b>×${FINAL_FACTOR}</b>.</span></li>
+          <li><span class="n">6</span><span>With <b>power-ups</b> on, you get one of each per game: ${POWERS.map((x) => `${x.icon} ${esc(x.name)}`).join(", ")}. They can't be used in bonus rounds.</span></li>
         </ol>
         <div class="scale">${TIERS.map((t) => `<div style="--c:${t.color}"><i></i><span>${esc(t.name)}</span><b>${t.points}</b></div>`).join("")}</div>
         <div class="modal-actions"><button type="button" class="btn primary" data-close>Got it</button></div>
@@ -1457,8 +1615,9 @@
 
   // ---------- Global click handling ----------
   document.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-act],[data-step],[data-cat],[data-pick]");
+    const btn = e.target.closest("[data-act],[data-step],[data-cat],[data-pick],[data-power]");
     if (!btn || btn.disabled) return;
+    if (btn.dataset.power) return usePower(btn.dataset.power);
     if (btn.dataset.pick) return pickOption(Number(btn.dataset.pick));
     if (btn.dataset.cat) {
       const id = btn.dataset.cat;
@@ -1503,10 +1662,19 @@
     }
   });
 
+  // Power-up tiles: show what the hovered one does under them.
+  const puDesc = (e) => {
+    const el = $("#pu-desc");
+    const b = e.target.closest && e.target.closest("[data-power]");
+    if (el) el.textContent = b && e.type !== "mouseout" && e.type !== "focusout" ? b.dataset.desc : "One use each per game";
+  };
+  ["mouseover", "mouseout", "focusin", "focusout"].forEach((t) => document.addEventListener(t, (e) => { if (e.target.closest && e.target.closest("[data-power]")) puDesc(e); }));
+
   document.addEventListener("change", (e) => {
     if (!isHost()) return;
     if (e.target.id === "set-rounds") pushSettings({ rounds: clamp(e.target.value, LIMITS.rounds) });
     if (e.target.id === "set-timer") pushSettings({ timer: clamp(e.target.value, LIMITS.timer) });
+    if (e.target.id === "set-powerups") pushSettings({ powerups: e.target.checked });
   });
 
   window.addEventListener("beforeunload", (e) => {
