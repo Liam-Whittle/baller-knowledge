@@ -32,6 +32,8 @@ const CATEGORIES = [
   { id: "geography", name: "Geography",      emoji: "🌍", questions: [] },
   { id: "science",   name: "Science & Tech", emoji: "🔬", questions: [] },
   { id: "language",  name: "Language",       emoji: "🔤", questions: [] },
+  // Extra categories live behind the "More categories" button and start switched off.
+  { id: "serious",   name: "You can't be serious?", emoji: "🤨", questions: [], extra: true, desc: "Silly, rude and ridiculous" },
 ];
 
 function addQuestions(categoryId, list) {

@@ -26,7 +26,8 @@ Each prompt shows one Common answer as a hint. On top of that:
   not usable in bonus rounds.
   - ⏱️ **+7 seconds:** extra time just for you. Anyone whose time has run out sees "Waiting for player turns…".
   - 🎁 **Free Rare:** adds a random Rare answer to your list.
-  - 🦝 **Steal:** when time's up, you take a random rival's top answer. If nobody has an answer, you keep the Steal.
+  - 🦝 **Steal:** when time's up, you copy a random rival's top answer. They keep it, and the copy doesn't count as
+    a shared answer, so nobody is halved for it. If nobody has an answer, you keep the Steal.
 
 These numbers are constants at the top of [`js/game.js`](js/game.js).
 
@@ -57,8 +58,10 @@ Open http://localhost:8080 and use a second tab or device to join.
 
 ## Adding categories and questions
 
-There are 6 categories: Nature, Food & Drink, Everyday Stuff and Geography with 100 questions each, plus Science & Tech and Language with 50 each, about
-88,000 answers in total. Questions live in [`js/questions/`](js/questions), 25 per file. Each question is one
+There are 7 categories: Nature, Food & Drink, Everyday Stuff and Geography with 100 questions each, Science & Tech and
+Language with 50 each, plus "You can't be serious?" (50 silly, rude prompts), about 90,000 answers in total.
+Categories with `extra: true` in `js/data.js` sit behind the lobby's **More categories** button and start switched off.
+Questions live in [`js/questions/`](js/questions), 25 per file. Each question is one
 array: the prompt, then one comma-separated string per tier:
 
 ```js

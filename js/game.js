@@ -10,7 +10,7 @@
   };
 
   const LIMITS = { rounds: [1, 30], timer: [5, 120] };
-  const DEFAULT_SETTINGS = () => ({ rounds: 10, timer: 20, categories: CATEGORIES.map((c) => c.id), powerups: false });
+  const DEFAULT_SETTINGS = () => ({ rounds: 10, timer: 20, categories: CATEGORIES.filter((c) => !c.extra).map((c) => c.id), powerups: false });
   const COUNTDOWN_MS = 3000;
   const GRACE_MS = 1000;
   const NEXT_LOCK_MS = 3000; // results stay up at least this long before "Next round" unlocks
@@ -30,7 +30,7 @@
   const POWERS = [
     { id: "time", icon: "⏱️", name: `+${POWER_SECONDS} seconds`, short: `+${POWER_SECONDS}s`, desc: `${POWER_SECONDS} extra seconds, just for you` },
     { id: "rare", icon: "🎁", name: "Free Rare", short: "Free Rare", desc: "Adds a random Rare answer to your list" },
-    { id: "steal", icon: "🦝", name: "Steal", short: "Steal", desc: "When time's up, take a random rival's top answer" },
+    { id: "steal", icon: "🦝", name: "Steal", short: "Steal", desc: "When time's up, copy a random rival's top answer" },
   ];
   const freshPowers = () => Object.fromEntries(POWERS.map((x) => [x.id, true]));
   const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -469,23 +469,24 @@
       const leader = Math.max(0, ...[...hs.players.values()].map((p) => p.score)); // scores before this round
       const byRank = (a, b) => Match.rank(b.tier) - Match.rank(a.tier);
 
-      // Steal power-ups: each thief (in random order) takes a random rival's current top answer.
+      // Steal power-ups: each thief copies a random rival's top answer. The rival keeps it,
+      // and the copy doesn't count as a shared answer, so neither of them is halved for it.
       const notes = new Map();
       const note = (pid, n) => { if (!notes.has(pid)) notes.set(pid, []); notes.get(pid).push(n); };
+      const own = new Map([...hs.players.values()].map((p) => [p, [...p.answers]])); // before any copying
       for (const t of shuffle([...hs.players.values()].filter((p) => p.stealArmed))) {
         t.stealArmed = false;
-        const victims = [...hs.players.values()].filter((v) => v !== t && v.answers.length);
+        const victims = [...hs.players.values()].filter((v) => v !== t && own.get(v).length);
         if (!victims.length) {
           t.powers.steal = true; // nothing to take, so they keep it
           note(t.id, { k: "steal", text: "Nothing to steal (Steal kept)" });
           continue;
         }
         const v = pickOne(victims);
-        const top = [...v.answers].sort(byRank)[0];
-        v.answers = v.answers.filter((a) => a !== top);
+        const top = [...own.get(v)].sort(byRank)[0];
         if (!t.answers.some((a) => a.display === top.display)) t.answers.push({ ...top, gift: false, stolen: v.name });
-        note(t.id, { k: "steal", text: `🦝 Stole ${top.display} from ${v.name}` });
-        note(v.id, { k: "stolen", text: `${top.display} stolen by ${t.name}` });
+        note(t.id, { k: "steal", text: `🦝 Copied ${top.display} from ${v.name}` });
+        note(v.id, { k: "stolen", text: `${t.name} copied ${top.display}` });
       }
 
       const results = [];
@@ -497,7 +498,7 @@
       }
       // How many players share each scoring answer.
       const shared = new Map();
-      for (const r of results) if (r.best) { const k = Match.key(r.best.display); shared.set(k, (shared.get(k) || 0) + 1); }
+      for (const r of results) if (r.best && !r.best.stolen) { const k = Match.key(r.best.display); shared.set(k, (shared.get(k) || 0) + 1); }
 
       for (const r of results) {
         r.notes = notes.get(r.id) || [];
@@ -641,7 +642,7 @@
     const tier = Match.tier(t);
     return `<span class="tier" data-t="${t}" style="--c:${tier.color}">${esc(tier.name)}${extra}</span>`;
   };
-  const powerTag = (a) => (a.gift ? `<i class="pu-tag" title="Free Rare power-up">🎁</i>` : a.stolen ? `<i class="pu-tag" title="Stolen from ${esc(a.stolen)}">🦝</i>` : "");
+  const powerTag = (a) => (a.gift ? `<i class="pu-tag" title="Free Rare power-up">🎁</i>` : a.stolen ? `<i class="pu-tag" title="Copied from ${esc(a.stolen)}">🦝</i>` : "");
   const chip = (a, cls = "") => `<span class="chip ${cls}" data-t="${a.tier}" style="--c:${Match.tier(a.tier).color}">${esc(a.display)}${a.ai ? `<i class="ai-tag" title="Judged by AI">AI</i>` : ""}${powerTag(a)}</span>`;
   const words = (text) => esc(text).split(" ").map((w, i) => `<span class="w" style="--i:${i}">${w}</span>`).join(" ");
 
@@ -806,6 +807,57 @@
       : `<p class="hint pulse">Waiting for the host to start…</p>`;
   }
 
+  const catTile = (c, s, dis) => `
+          <button class="cat ${s.categories.includes(c.id) ? "on" : ""}" data-cat="${c.id}" ${dis} aria-pressed="${s.categories.includes(c.id)}">
+            <span class="emo">${c.emoji}</span>
+            <span class="cname">${esc(c.name)}<small>${c.questions.length} questions</small></span>
+            <span class="tick" aria-hidden="true"></span></button>`;
+
+  // The extra categories sit behind one button; it shows which of them are switched on.
+  function moreCatsButton(s) {
+    const extras = CATEGORIES.filter((c) => c.extra);
+    if (!extras.length) return "";
+    const on = extras.filter((c) => s.categories.includes(c.id));
+    return `<button type="button" class="cat more-cats ${on.length ? "on" : ""}" data-act="more-cats">
+            <span class="emo">${on.length ? on.map((c) => c.emoji).join("") : "✨"}</span>
+            <span class="cname">More categories<small>${on.length ? `${on.length} on` : `${extras.length} more to pick from`}</small></span>
+            <span class="more-arrow" aria-hidden="true">›</span></button>`;
+  }
+
+  function openMoreCats() {
+    if (document.querySelector(".more-box")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "modal";
+    wrap.innerHTML = `
+      <div class="modal-box card more-box" role="dialog" aria-modal="true" aria-labelledby="more-title">
+        <h3 id="more-title">More categories</h3>
+        <p>${isHost() ? "Add these to the mix. They're off unless you switch them on." : "The host picks which of these are in the game."}</p>
+        <div class="cats more-list" id="more-list"></div>
+        <div class="modal-actions"><button type="button" class="btn primary" data-close>Done</button></div>
+      </div>`;
+    const close = () => {
+      wrap.classList.add("out");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => wrap.remove(), 180);
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    wrap.addEventListener("click", (e) => { if (e.target === wrap || e.target.closest("[data-close]")) close(); });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(wrap);
+    renderMoreCats();
+    wrap.querySelector("[data-close]").focus();
+  }
+
+  // Redrawn whenever the settings change, so the popup stays in sync for everyone.
+  function renderMoreCats() {
+    const el = $("#more-list");
+    if (!el || !state) return;
+    const dis = isHost() ? "" : "disabled";
+    el.innerHTML = CATEGORIES.filter((c) => c.extra).map((c) => catTile(c, state.settings, dis).replace(
+      `<small>${c.questions.length} questions</small>`,
+      `<small>${c.questions.length} questions${c.desc ? ` · ${esc(c.desc)}` : ""}</small>`)).join("");
+  }
+
   function renderSettings() {
     const s = state.settings;
     const host = isHost();
@@ -824,11 +876,8 @@
           <button type="button" class="btn small" data-step="timer:5" aria-label="More seconds" ${dis}>+</button></div></div>
       </div>
       <div class="field"><span>Categories</span>
-        <div class="cats">${CATEGORIES.map((c) => `
-          <button class="cat ${s.categories.includes(c.id) ? "on" : ""}" data-cat="${c.id}" ${dis} aria-pressed="${s.categories.includes(c.id)}">
-            <span class="emo">${c.emoji}</span>
-            <span class="cname">${esc(c.name)}<small>${c.questions.length} questions</small></span>
-            <span class="tick" aria-hidden="true"></span></button>`).join("")}</div>
+        <div class="cats">${CATEGORIES.filter((c) => !c.extra).map((c) => catTile(c, s, dis)).join("")}
+          ${moreCatsButton(s)}</div>
       </div>
       ${qCount < s.rounds ? `<p class="hint">Only ${qCount} questions picked, so some will repeat.</p>` : ""}
       <label class="pu-line ${s.powerups ? "on" : ""}">
@@ -844,6 +893,7 @@
           : host ? "Add an OpenAI key to check answers that aren't on the list." : "Only answers on the list count."}</small></span>
         ${host ? `<button class="btn small" data-act="ai-setup">${state.ai ? "Change" : "Set up"}</button>` : ""}
       </div>`;
+    renderMoreCats();
   }
 
   // ---------- AI judge key (saved only in this browser) ----------
@@ -1159,7 +1209,7 @@
       Sfx.play("go");
       if (r) Fx.floatText(r.left + r.width / 2, r.top, `+${POWER_SECONDS}s`, "#ffc42e");
     } else if (msg.kind === "steal") {
-      feedback("🦝 Steal armed! When time's up you take a random rival's top answer.", "ask", 3200);
+      feedback("🦝 Steal armed! When time's up you copy a random rival's top answer.", "ask", 3200);
       Sfx.play("go");
     }
     if (r) Fx.burst(r.left + r.width / 2, r.top + r.height / 2, "#ffc42e", 14, 4);
@@ -1656,6 +1706,7 @@
       case "done": markDone(); break;
       case "pick-avatar": e.preventDefault(); openAvatarPicker(); break;
       case "how": openHowTo(); break;
+      case "more-cats": openMoreCats(); break;
       case "ai-setup": openAiSettings(); break;
       case "next": session.send({ t: "next" }); break;
       case "lobby": session.send({ t: "lobby" }); break;
