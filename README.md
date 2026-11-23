@@ -14,6 +14,17 @@ rarest answer scores**.
 | Elite Baller | 100 |
 | Omniscient | 200 |
 
+Each prompt shows one Common answer as a hint. On top of that:
+
+- **Shared answers:** if two or more players score with the same answer, each gets half.
+- **Comeback:** if you're behind the leader, a Rare-or-better answer earns up to +30% extra. The further behind
+  you are, the bigger the boost.
+- **Bonus rounds:** every 5th round (never the last) is multiple choice. You pick one of 6 answers of mixed
+  rarity, and that pick is your score.
+- **Final round:** your scoring answer is worth ×1.5.
+
+These numbers are constants at the top of [`js/game.js`](js/game.js).
+
 ## How it runs
 
 It's a pure static site, with no server. The host's browser runs the game, and players connect to it
@@ -41,8 +52,8 @@ Open http://localhost:8080 and use a second tab or device to join.
 
 ## Adding categories and questions
 
-There are 4 categories (Nature, Food & Drink, Everyday Stuff, Geography) with 100 questions each, about
-24,000 answers in total. Questions live in [`js/questions/`](js/questions), 25 per file. Each question is one
+There are 6 categories: Nature, Food & Drink, Everyday Stuff and Geography with 100 questions each, plus Science & Tech and Language with 50 each, about
+88,000 answers in total. Questions live in [`js/questions/`](js/questions), 25 per file. Each question is one
 array: the prompt, then one comma-separated string per tier:
 
 ```js

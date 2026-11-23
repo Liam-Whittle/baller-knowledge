@@ -30,6 +30,8 @@ const CATEGORIES = [
   { id: "food",      name: "Food & Drink",   emoji: "🍔", questions: [] },
   { id: "everyday",  name: "Everyday Stuff", emoji: "🏠", questions: [] },
   { id: "geography", name: "Geography",      emoji: "🌍", questions: [] },
+  { id: "science",   name: "Science & Tech", emoji: "🔬", questions: [] },
+  { id: "language",  name: "Language",       emoji: "🔤", questions: [] },
 ];
 
 function addQuestions(categoryId, list) {

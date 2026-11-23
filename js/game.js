@@ -15,6 +15,16 @@
   const GRACE_MS = 1000;
   const NEXT_LOCK_MS = 3000; // results stay up at least this long before "Next round" unlocks
 
+  // Scoring twists.
+  const SHARED_FACTOR = 0.5;   // two or more players with the same scoring answer each get half
+  const FINAL_FACTOR = 1.5;    // the last round's scoring answer is worth this much more
+  const COMEBACK_MAX = 0.3;    // up to +30% for a Rare-or-better answer, scaled by how far behind the leader you are
+  const COMEBACK_MIN_RANK = 2; // Rare and up (Common 0, Uncommon 1)
+  const BONUS_EVERY = 5;       // every 5th round is a multiple-choice bonus round (never the last round)
+  const BONUS_OPTIONS = 6;
+  const BONUS_SECONDS = 7;     // bonus rounds are quick-fire, whatever the lobby's timer is
+  const isBonusRound = (round, total) => round % BONUS_EVERY === 0 && round < total;
+
   const questionOf = (ref) => {
     const c = ref && CATEGORIES.find((c) => c.id === ref.catId);
     return c ? c.questions[ref.qi] : null;
@@ -22,12 +32,12 @@
   const clamp = (n, [lo, hi]) => Math.min(hi, Math.max(lo, Math.round(Number(n) || lo)));
   const cleanName = (n) => String(n || "").replace(/\s+/g, " ").trim().slice(0, 16) || "Player";
 
-  // Profile pictures: "p1".."p20" for the presets, or a small uploaded image as a data URL.
-  const PRESET_COUNT = 20;
+  // Profile pictures: "p1".."p16" for the presets, or a small uploaded image as a data URL.
+  const PRESET_COUNT = 16;
   const MAX_AVATAR_CHARS = 60000;
   const cleanAvatar = (v) => {
     v = String(v || "");
-    if (/^p([1-9]|1\d|20)$/.test(v)) return v;
+    if (/^p[1-9]\d?$/.test(v) && +v.slice(1) <= PRESET_COUNT) return v;
     if (v.length < MAX_AVATAR_CHARS && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(v)) return v;
     return "";
   };
@@ -156,6 +166,8 @@
       round: 0,
       totalRounds: 10,
       ref: null,
+      hint: null,    // one Common answer shown under the prompt
+      options: null, // bonus round only: [{display, tier}], tiers stay on the host
       startAt: 0,
       endAt: 0,
       used: new Set(),
@@ -229,7 +241,7 @@
         case "answer": {
           const p = hs.players.get(id);
           const now = Date.now();
-          if (!p || hs.phase !== "round" || now < hs.startAt - 250 || now > hs.endAt + GRACE_MS) return;
+          if (!p || hs.options || hs.phase !== "round" || now < hs.startAt - 250 || now > hs.endAt + GRACE_MS) return;
           const e = Match.exact(questionOf(hs.ref), msg.text);
           if (!e || p.answers.some((a) => a.display === e.display)) return;
           p.answers.push({ display: e.display, tier: e.tier });
@@ -240,7 +252,7 @@
           // An answer that isn't in the dictionary: ask the AI judge (using the host's key).
           const p = hs.players.get(id);
           const now = Date.now();
-          if (!p || hs.phase !== "round" || now < hs.startAt - 250 || now > hs.endAt + GRACE_MS) return;
+          if (!p || hs.options || hs.phase !== "round" || now < hs.startAt - 250 || now > hs.endAt + GRACE_MS) return;
           const nonce = String(msg.nonce || "").slice(0, 20);
           const text = String(msg.text || "").replace(/\s+/g, " ").trim().slice(0, 60);
           if (!text) return;
@@ -271,6 +283,18 @@
               pend.n--;
               if (pend === hs.aiPend && hs.aiWaiting && pend.n <= 0) endRound(true);
             });
+          break;
+        }
+        case "pick": {
+          // Bonus round: one locked-in choice from the multiple-choice options.
+          const p = hs.players.get(id);
+          const now = Date.now();
+          if (!p || !hs.options || hs.phase !== "round" || now < hs.startAt - 250 || now > hs.endAt + GRACE_MS) return;
+          const o = hs.options[Number(msg.i)];
+          if (!o || p.answers.length) return;
+          p.answers = [{ display: o.display, tier: o.tier }];
+          p.done = true;
+          if (!checkAllDone()) publish();
           break;
         }
         case "settings": {
@@ -313,6 +337,8 @@
           hs.phase = "lobby";
           hs.ref = null;
           hs.reveal = null;
+          hs.options = null;
+          hs.hint = null;
           for (const [pid, p] of hs.players) {
             if (!p.connected) hs.players.delete(pid);
             p.score = 0;
@@ -346,16 +372,37 @@
       hs.ref = fresh[Math.floor(Math.random() * fresh.length)];
       hs.used.add(`${hs.ref.catId}:${hs.ref.qi}`);
       hs.round++;
+      const entries = Match.index(questionOf(hs.ref)).entries;
+      const pickOne = (list) => list[Math.floor(Math.random() * list.length)];
+      const commons = entries.filter((e) => e.tier === "common");
+      hs.options = isBonusRound(hs.round, hs.totalRounds) ? bonusOptions(entries) : null;
+      // No hint in a bonus round: it would give away a Common option.
+      hs.hint = !hs.options && commons.length ? pickOne(commons).display : null;
       for (const p of hs.players.values()) { p.answers = []; p.done = false; p.aiAsks = 0; }
       hs.startAt = Date.now() + COUNTDOWN_MS;
       hs.aiPend = { round: hs.startAt, n: 0 };
       hs.aiWaiting = false;
-      hs.endAt = hs.startAt + hs.settings.timer * 1000;
+      hs.endAt = hs.startAt + (hs.options ? BONUS_SECONDS : hs.settings.timer) * 1000;
       hs.phase = "round";
       hs.reveal = null;
       clearTimeout(hs.timer);
       hs.timer = setTimeout(endRound, hs.endAt - Date.now() + GRACE_MS);
       publish();
+    }
+
+    // Six options for a bonus round: one from every tier, then random extras, shuffled.
+    function bonusOptions(entries) {
+      const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+      const chosen = [];
+      for (const t of TIERS) {
+        const inTier = entries.filter((e) => e.tier === t.id);
+        if (inTier.length) chosen.push(inTier[Math.floor(Math.random() * inTier.length)]);
+      }
+      for (const e of shuffle(entries.filter((e) => !chosen.includes(e)))) {
+        if (chosen.length >= BONUS_OPTIONS) break;
+        chosen.push(e);
+      }
+      return shuffle(chosen.slice(0, BONUS_OPTIONS)).map((e) => ({ display: e.display, tier: e.tier }));
     }
 
     function endRound(force) {
@@ -372,20 +419,40 @@
       clearTimeout(hs.timer);
       hs.aiWaiting = false;
       const q = questionOf(hs.ref);
+      const final = hs.round === hs.totalRounds;
+      const leader = Math.max(0, ...[...hs.players.values()].map((p) => p.score)); // scores before this round
       const results = [];
       const said = new Set();
       for (const p of hs.players.values()) {
         const answers = [...p.answers].sort((a, b) => Match.rank(b.tier) - Match.rank(a.tier));
         answers.forEach((a) => { if (!a.ai) said.add(a.display); });
-        const best = answers[0] || null;
-        const points = best ? Match.tier(best.tier).points : 0;
-        p.score += points;
-        results.push({ id: p.id, name: p.name, answers, best, points });
+        results.push({ id: p.id, name: p.name, answers, best: answers[0] || null, before: p.score });
       }
+      // How many players share each scoring answer.
+      const shared = new Map();
+      for (const r of results) if (r.best) { const k = Match.key(r.best.display); shared.set(k, (shared.get(k) || 0) + 1); }
+
+      for (const r of results) {
+        r.notes = [];
+        r.points = 0;
+        if (!r.best) continue;
+        const base = Match.tier(r.best.tier).points;
+        let pts = base;
+        if (final) { pts = Math.round(pts * FINAL_FACTOR); r.notes.push({ k: "final", text: `Final round ×${FINAL_FACTOR}` }); }
+        if (shared.get(Match.key(r.best.display)) > 1) { pts = Math.round(pts * SHARED_FACTOR); r.notes.push({ k: "shared", text: "Shared answer ×½" }); }
+        // Comeback: the further behind the leader, the bigger the boost (rounded to 5s, so it fades out near the top).
+        if (Match.rank(r.best.tier) >= COMEBACK_MIN_RANK && leader > 0 && r.before < leader) {
+          const bonus = Math.round((pts * COMEBACK_MAX * (leader - r.before)) / leader / 5) * 5;
+          if (bonus > 0) { pts += bonus; r.notes.push({ k: "comeback", text: `Comeback +${bonus}` }); }
+        }
+        r.base = base;
+        r.points = pts;
+      }
+      for (const r of results) { hs.players.get(r.id).score += r.points; delete r.before; }
       results.sort((a, b) => b.points - a.points || b.answers.length - a.answers.length);
 
       // Unfound answers are deliberately never shown, so nobody can memorise them for next time.
-      hs.reveal = { results, totalAnswers: Match.index(q).entries.length, foundCount: said.size };
+      hs.reveal = { results, totalAnswers: Match.index(q).entries.length, foundCount: said.size, options: hs.options, final };
       hs.phase = "reveal";
       publish();
     }
@@ -405,7 +472,11 @@
         players: [...hs.players.values()].map((p) => ({
           id: p.id, name: p.name, avatar: p.avatar && p.avatar.startsWith("data:") ? "custom" : p.avatar || "", score: p.score, connected: p.connected, count: p.answers.length, done: !!p.done,
         })),
-        question: q ? { ...hs.ref, prompt: q.prompt, catName: cat.name, emoji: cat.emoji } : null,
+        question: q ? {
+          ...hs.ref, prompt: q.prompt, catName: cat.name, emoji: cat.emoji, hint: hs.hint,
+          bonus: !!hs.options, options: hs.options ? hs.options.map((o) => o.display) : null,
+          final: hs.round === hs.totalRounds,
+        } : null,
         startsInMs: Math.max(0, hs.startAt - now),
         remainingMs: Math.max(0, hs.endAt - now),
         reveal: hs.reveal,
@@ -470,7 +541,7 @@
     }
     return v;
   }
-  const avatarSrc = (v) => (v.startsWith("p") ? `assets/avatars/${v.slice(1)}.webp` : v.startsWith("data:") ? v : "");
+  const avatarSrc = (v) => (v.startsWith("p") ? `assets/avatars/${v.slice(1)}.webp?v=3` : v.startsWith("data:") ? v : "");
 
   function onState(st) {
     state = st;
@@ -561,15 +632,10 @@
           `}
         </form>
 
-        <section class="card how">
-          <h2>How it works</h2>
-          <ol class="steps">
-            <li><span class="n">1</span><span>Everyone gets the same prompt.</span></li>
-            <li><span class="n">2</span><span>Name as many answers as you can before time runs out.</span></li>
-            <li><span class="n">3</span><span>Only your <b class="gold">rarest answer</b> scores.</span></li>
-          </ol>
-          <div class="scale">${TIERS.map((t) => `<div style="--c:${t.color}"><i></i><span>${esc(t.name)}</span><b>${t.points}</b></div>`).join("")}</div>
-        </section>
+        <button type="button" class="how-link" data-act="how">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="7.4" r="1.4" fill="currentColor"/></svg>
+          How it works
+        </button>
       </main>`;
     const nameEl = $("#name");
     (room ? nameEl : nameEl.value ? $("#code") : nameEl)?.focus();
@@ -693,7 +759,7 @@
           <button class="cat ${s.categories.includes(c.id) ? "on" : ""}" data-cat="${c.id}" ${dis} aria-pressed="${s.categories.includes(c.id)}">
             <span class="emo">${c.emoji}</span>
             <span class="cname">${esc(c.name)}<small>${c.questions.length} questions</small></span>
-            <span class="tick">✓</span></button>`).join("")}</div>
+            <span class="tick" aria-hidden="true"></span></button>`).join("")}</div>
       </div>
       ${qCount < s.rounds ? `<p class="hint">Only ${qCount} questions picked, so some will repeat.</p>` : ""}
       <div class="ai-line ${state.ai ? "on" : ""}">
@@ -787,50 +853,90 @@
   // ---------- Round ----------
   function mountRound() {
     const q = state.question;
+    const special = q.bonus
+      ? `<div class="cd-special bonus">★ Bonus round ★<small>${BONUS_SECONDS} seconds to pick the rarest answer. You only get one choice.</small></div>`
+      : q.final ? `<div class="cd-special final">Final round<small>Your scoring answer is worth ×${FINAL_FACTOR}</small></div>` : "";
+    const play = q.bonus
+      ? `<p class="mc-help">Pick the rarest answer. You only get one choice, and shared picks score half.</p>
+         <div class="mc-grid" id="mc">${q.options.map((o, i) => `<button type="button" class="mc-opt" data-pick="${i}" style="--i:${i}" disabled>${esc(o)}</button>`).join("")}</div>
+         <div class="feedback" id="feedback"></div>
+         <div class="best" id="best"></div>`
+      : `${q.hint ? `<p class="prompt-hint">Hint: <b>${esc(q.hint)}</b></p>` : ""}
+         <form id="ans-form" class="ans-form" autocomplete="off">
+           <div class="ans-wrap">
+             <input id="ans" placeholder="Type an answer…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" disabled>
+           </div>
+           <button class="btn primary" type="submit" id="ans-btn" disabled>Add</button>
+         </form>
+         <div class="feedback" id="feedback"></div>
+         <div class="best" id="best"></div>
+         <ul class="my-answers" id="mine"></ul>`;
     app.innerHTML = `
-      <main class="round">
+      <main class="round ${q.bonus ? "is-bonus" : ""} ${q.final ? "is-final" : ""}">
         ${topbar(`<span class="pill">Round ${state.round}/${state.totalRounds}</span>
-                  <span class="pill cat-pill">${q.emoji} ${esc(q.catName)}</span>`)}
+                  <span class="pill cat-pill">${q.emoji} ${esc(q.catName)}</span>
+                  ${q.bonus ? `<span class="pill special-pill bonus">★ Bonus</span>` : q.final ? `<span class="pill special-pill final">Final ×${FINAL_FACTOR}</span>` : ""}`)}
         <div class="timer"><div class="timer-fill" id="tfill"></div><span id="tnum"></span></div>
         <div class="round-grid">
           <section class="play">
             <h2 class="prompt" id="prompt">${words(q.prompt)}</h2>
-            <form id="ans-form" class="ans-form" autocomplete="off">
-              <div class="ans-wrap">
-                <input id="ans" placeholder="Type an answer…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" disabled>
-              </div>
-              <button class="btn primary" type="submit" id="ans-btn" disabled>Add</button>
-            </form>
-            <div class="feedback" id="feedback"></div>
-            <div class="best" id="best"></div>
-            <ul class="my-answers" id="mine"></ul>
+            ${play}
           </section>
           <aside class="card side">
-            <h3>Answers so far</h3>
+            <h3>${q.bonus ? "Picked" : "Answers so far"}</h3>
             <ul class="players compact" id="counts"></ul>
-            <button class="btn wide" id="done-btn" data-act="done" disabled>I'm done</button>
-            <p class="hint small-hint" id="done-hint">The round ends when the timer runs out or everyone is done.</p>
+            ${q.bonus ? "" : `<button class="btn wide" id="done-btn" data-act="done" disabled>I'm done</button>`}
+            <p class="hint small-hint" id="done-hint">${q.bonus ? "The round ends when everyone has picked or the timer runs out." : "The round ends when the timer runs out or everyone is done."}</p>
           </aside>
         </div>
       </main>
       <div class="countdown" id="countdown">
           <div class="cd-round">Round ${state.round} of ${state.totalRounds}</div>
           <div class="cd-cat">${q.emoji} ${esc(q.catName)}</div>
+          ${special}
           <div class="cd-num" id="cdnum"></div>
       </div>`;
 
     const input = $("#ans");
-    input.addEventListener("keydown", (e) => { if (e.key === "Escape") input.value = ""; });
-    $("#ans-form").addEventListener("submit", (e) => { e.preventDefault(); submitAnswer(); });
+    if (input) {
+      input.addEventListener("keydown", (e) => { if (e.key === "Escape") input.value = ""; });
+      $("#ans-form").addEventListener("submit", (e) => { e.preventDefault(); submitAnswer(); });
+    }
 
     view.iAmDone = false;
+    view.timeUp = false;
     view.started = false;
     view.lastCd = null;
     view.lastSec = null;
     renderMine();
+    if (q.bonus && view.myAnswers.length) showPicked(view.myAnswers[0].display);
     updateRound();
     tickRound();
     view.tick = setInterval(tickRound, 100);
+  }
+
+  // Bonus round: lock in one option.
+  function pickOption(i) {
+    if (view.iAmDone) return;
+    const display = state.question.options[i];
+    if (display == null) return;
+    view.iAmDone = true;
+    view.myAnswers = [{ display, tier: null }];
+    session.send({ t: "pick", i });
+    showPicked(display);
+    Sfx.play("go");
+    feedback(`Locked in <b>${esc(display)}</b>. Rarity is revealed at the end.`, "ask", 0);
+    updateRound();
+  }
+
+  function showPicked(display) {
+    view.iAmDone = true;
+    app.querySelectorAll(".mc-opt").forEach((b) => {
+      b.disabled = true;
+      b.classList.toggle("picked", b.textContent === display);
+    });
+    const bestEl = $("#best");
+    if (bestEl) bestEl.innerHTML = `<span class="label">Your pick</span> <b>${esc(display)}</b>`;
   }
 
   let fbTimer;
@@ -957,6 +1063,11 @@
 
   function renderMine(fresh, newBest) {
     if (!$("#best")) return;
+    if (!$("#mine")) {
+      // Bonus round: there's no list, just the one pick.
+      if (!view.myAnswers.length) $("#best").innerHTML = `<span class="label">Choose one answer. Go for the rarest!</span>`;
+      return;
+    }
     const sorted = [...view.myAnswers].sort((a, b) => Match.rank(b.tier) - Match.rank(a.tier));
     const best = sorted[0];
     const bestEl = $("#best");
@@ -985,7 +1096,6 @@
   function markDone() {
     if (view.iAmDone) return;
     view.iAmDone = true;
-    session.send({ t: "done" });
     const input = $("#ans");
     input.disabled = true;
     input.value = "";
@@ -996,11 +1106,14 @@
     btn.textContent = "Done ✓";
     feedback("", "", 1);
     updateRound();
+    // Sent last: if we're the host and the last one done, this ends the round and swaps the screen at once.
+    session.send({ t: "done" });
   }
 
   function tickRound() {
     const now = Date.now();
-    const total = state.settings.timer * 1000;
+    const secs = state.question.bonus ? BONUS_SECONDS : state.settings.timer;
+    const total = secs * 1000;
     const cd = $("#countdown");
     const input = $("#ans");
     if (!cd) return clearInterval(view.tick);
@@ -1014,7 +1127,7 @@
         Sfx.play("tick");
       }
       $("#tfill").style.width = "100%";
-      $("#tnum").textContent = state.settings.timer;
+      $("#tnum").textContent = secs;
       return;
     }
     // Runs once when the round starts (also for players who join mid-round).
@@ -1028,10 +1141,14 @@
       }
       $("#prompt").classList.add("go");
       if (!view.iAmDone && now < view.endLocal) {
-        input.disabled = false;
-        $("#ans-btn").disabled = false;
-        $("#done-btn").disabled = false;
-        input.focus();
+        if (input) {
+          input.disabled = false;
+          $("#ans-btn").disabled = false;
+          $("#done-btn").disabled = false;
+          input.focus();
+        } else {
+          app.querySelectorAll(".mc-opt").forEach((b) => (b.disabled = false));
+        }
       }
     }
     const left = Math.max(0, view.endLocal - now);
@@ -1048,6 +1165,14 @@
         tn.classList.remove("tick"); void tn.offsetWidth; tn.classList.add("tick");
         if (!view.iAmDone) Sfx.play("clock");
       }
+    }
+    if (!input) {
+      if (left <= 0 && !view.timeUp) {
+        view.timeUp = true;
+        app.querySelectorAll(".mc-opt").forEach((b) => (b.disabled = true));
+        if (!view.myAnswers.length) feedback("Time's up! No pick this round.", "meh", 0);
+      }
+      return;
     }
     if (left <= 0 && !input.placeholder.startsWith("Time")) {
       input.disabled = true;
@@ -1070,8 +1195,11 @@
         ${topbar(`<span class="pill">Round ${state.round} of ${state.totalRounds}</span>`)}
         <header class="reveal-head">
           <span class="eyebrow">${q.emoji} ${esc(q.catName)}</span>
+          ${r.options ? `<span class="pill special-pill bonus">★ Bonus round</span>` : r.final ? `<span class="pill special-pill final">Final round ×${FINAL_FACTOR}</span>` : ""}
           <h2 class="prompt small">${esc(q.prompt)}</h2>
-          <p class="hint">The room found <b>${r.foundCount}</b> of ${r.totalAnswers} answers</p>
+          ${r.options
+            ? `<div class="mc-reveal">${[...r.options].sort((a, b) => Match.rank(b.tier) - Match.rank(a.tier)).map((o) => chip(o)).join("")}</div>`
+            : `<p class="hint">The room found <b>${r.foundCount}</b> of ${r.totalAnswers} answers</p>`}
         </header>
         <section class="card">
           <ol class="results">
@@ -1082,7 +1210,8 @@
                   <div class="rname">${esc(p.name)}${p.id === session.me ? `<span class="you">you</span>` : ""}</div>
                   ${p.best
                     ? `<div class="rpick"><b>${esc(p.best.display)}</b>${p.best.ai ? `<i class="ai-tag" title="Judged by AI">AI</i>` : ""}${tierBadge(p.best.tier)}</div>`
-                    : `<div class="rpick none">No answers</div>`}
+                    : `<div class="rpick none">${r.options ? "No pick" : "No answers"}</div>`}
+                  ${p.notes && p.notes.length ? `<div class="rnotes">${p.notes.map((n) => `<span class="rnote ${n.k}">${esc(n.text)}</span>`).join("")}</div>` : ""}
                   ${p.answers.length > 1 ? `<div class="ralso">Also: ${p.answers.slice(1).map((a) => esc(a.display) + (a.ai ? ` <i class="ai-tag">AI</i>` : "")).join(", ")}</div>` : ""}
                 </div>
                 <span class="gain" data-to="${p.points}" style="--d:${i * 140 + 350}ms">+0</span>
@@ -1168,6 +1297,36 @@
       </main>`;
     app.querySelectorAll(".podium .num").forEach((el) => setTimeout(() => Fx.countUp(el, Number(el.dataset.to), 1200), 500));
     setTimeout(() => { Fx.confetti(4000); Sfx.play("win"); }, 900);
+  }
+
+  // ---------- How it works (opened from the ⓘ button) ----------
+  function openHowTo() {
+    if (document.querySelector(".how-box")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "modal";
+    wrap.innerHTML = `
+      <div class="modal-box card how-box" role="dialog" aria-modal="true" aria-labelledby="how-title">
+        <h3 id="how-title">How it works</h3>
+        <ol class="steps">
+          <li><span class="n">1</span><span>Everyone gets the same prompt.</span></li>
+          <li><span class="n">2</span><span>Name as many answers as you can before time runs out.</span></li>
+          <li><span class="n">3</span><span>Only your <b class="gold">rarest answer</b> scores.</span></li>
+          <li><span class="n">4</span><span>Same answer as someone else? You both get <b>half</b>. Behind? Rare-or-better answers get a <b>comeback boost</b>.</span></li>
+          <li><span class="n">5</span><span>Every 5th round is a <b>multiple-choice bonus</b> with ${BONUS_SECONDS} seconds to pick, and the last round is worth <b>×${FINAL_FACTOR}</b>.</span></li>
+        </ol>
+        <div class="scale">${TIERS.map((t) => `<div style="--c:${t.color}"><i></i><span>${esc(t.name)}</span><b>${t.points}</b></div>`).join("")}</div>
+        <div class="modal-actions"><button type="button" class="btn primary" data-close>Got it</button></div>
+      </div>`;
+    const close = () => {
+      wrap.classList.add("out");
+      document.removeEventListener("keydown", onKey);
+      setTimeout(() => wrap.remove(), 180);
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    wrap.addEventListener("click", (e) => { if (e.target === wrap || e.target.closest("[data-close]")) close(); });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(wrap);
+    wrap.querySelector("[data-close]").focus();
   }
 
   // ---------- Confirm dialog (the browser's confirm() can be blocked, so we draw our own) ----------
@@ -1298,8 +1457,9 @@
 
   // ---------- Global click handling ----------
   document.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-act],[data-step],[data-cat]");
+    const btn = e.target.closest("[data-act],[data-step],[data-cat],[data-pick]");
     if (!btn || btn.disabled) return;
+    if (btn.dataset.pick) return pickOption(Number(btn.dataset.pick));
     if (btn.dataset.cat) {
       const id = btn.dataset.cat;
       const cur = state.settings.categories;
@@ -1336,6 +1496,7 @@
       case "start": session.send({ t: "start" }); break;
       case "done": markDone(); break;
       case "pick-avatar": e.preventDefault(); openAvatarPicker(); break;
+      case "how": openHowTo(); break;
       case "ai-setup": openAiSettings(); break;
       case "next": session.send({ t: "next" }); break;
       case "lobby": session.send({ t: "lobby" }); break;
