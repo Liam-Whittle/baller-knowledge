@@ -5,6 +5,7 @@ const Fx = (() => {
   const canvas = document.getElementById("fx");
   const ctx = canvas.getContext("2d");
   let particles = [];
+  let rings = [];
   let running = false;
   let dpr = 1;
 
@@ -17,8 +18,49 @@ const Fx = (() => {
   resize();
   addEventListener("resize", resize);
 
-  function loop() {
+  // Same curve as the CSS cubic-bezier(.65, 0, .35, 1) the theme reveal uses, near enough.
+  const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+  function drawRings(now) {
+    rings = rings.filter((r) => now - r.start < r.ms);
+    for (const r of rings) {
+      const t = Math.max(0, (now - r.start) / r.ms);
+      const rad = easeInOut(t) * r.maxR;
+      if (rad < 1) continue;
+      const fade = Math.min(1, t * 6) * (1 - Math.pow(t, 3)); // quick fade in, gentle fade out
+      ctx.save();
+      ctx.strokeStyle = r.color;
+      ctx.shadowColor = r.color;
+      // A wide soft halo, then a crisp bright edge.
+      ctx.globalAlpha = 0.18 * fade;
+      ctx.lineWidth = 26;
+      ctx.shadowBlur = 0;
+      ctx.beginPath(); ctx.arc(r.x, r.y, Math.max(1, rad - 10), 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 0.95 * fade;
+      ctx.lineWidth = 2.5;
+      ctx.shadowBlur = 22;
+      ctx.beginPath(); ctx.arc(r.x, r.y, rad, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      // Sparkles peel off the edge as it travels.
+      if (t < 0.85) {
+        for (let i = 0; i < 4; i++) {
+          const ang = Math.random() * Math.PI * 2;
+          const out = 0.6 + Math.random() * 1.6;
+          particles.push({
+            x: r.x + Math.cos(ang) * rad, y: r.y + Math.sin(ang) * rad,
+            vx: Math.cos(ang) * out, vy: Math.sin(ang) * out,
+            gravity: 0, drag: 0.94, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.2,
+            size: 3 + Math.random() * 5, life: 22 + Math.random() * 22,
+            color: Math.random() < 0.5 ? r.color : "#ffffff", shape: Math.random() < 0.5 ? "star" : "dot",
+          });
+        }
+      }
+    }
+  }
+
+  function loop(now) {
     ctx.clearRect(0, 0, innerWidth, innerHeight);
+    drawRings(now || performance.now());
     particles = particles.filter((p) => p.life > 0);
     for (const p of particles) {
       p.vy += p.gravity;
@@ -48,7 +90,7 @@ const Fx = (() => {
       }
       ctx.restore();
     }
-    if (particles.length) requestAnimationFrame(loop);
+    if (particles.length || rings.length) requestAnimationFrame(loop);
     else running = false;
   }
 
@@ -67,10 +109,17 @@ const Fx = (() => {
     if (!running) { running = true; requestAnimationFrame(loop); }
   }
 
+  // A glowing ring that grows from (x, y) to maxR over ms, shedding sparkles. Used by the theme reveal.
+  function ring(x, y, maxR, ms, color) {
+    if (reduced) return;
+    rings.push({ x, y, maxR, ms, color, start: performance.now() });
+    if (!running) { running = true; requestAnimationFrame(loop); }
+  }
+
   // Sparkle burst from a point, in the tier's colour.
   function burst(x, y, color, count = 18, power = 6) {
     if (reduced) return;
-    const colors = [color, color, "#fff4c2", "#ffd23f"];
+    const colors = [color, color, ...(iceMode() ? ["#e8faff", "#5fd0ff"] : ["#fff4c2", "#ffd23f"])];
     add(Array.from({ length: count }, () => {
       const ang = Math.random() * Math.PI * 2;
       const sp = power * (0.4 + Math.random());
@@ -84,10 +133,15 @@ const Fx = (() => {
     }));
   }
 
-  // Gold and purple confetti raining from the top (and two side cannons).
+  // Characters mode uses the blue palette.
+  const iceMode = () => document.documentElement.dataset.game === "chars";
+
+  // Gold and purple confetti (blue and white in Characters mode) raining from the top, plus two side cannons.
   function confetti(ms = 3500) {
     if (reduced) return;
-    const colors = ["#ffd23f", "#f5a20c", "#8f3dff", "#b45cff", "#ffffff", "#ff7ad9"];
+    const colors = iceMode()
+      ? ["#5fd0ff", "#1e8fff", "#a9c2ff", "#4da3ff", "#ffffff", "#7ff0e0"]
+      : ["#ffd23f", "#f5a20c", "#8f3dff", "#b45cff", "#ffffff", "#ff7ad9"];
     const end = Date.now() + ms;
     const cannon = (fromLeft) => add(Array.from({ length: 60 }, () => {
       const ang = fromLeft ? -Math.PI / 3 - Math.random() * 0.5 : -Math.PI * 2 / 3 + Math.random() * 0.5;
@@ -164,5 +218,5 @@ const Fx = (() => {
   }
   ambient();
 
-  return { burst, confetti, floatText, banner, countUp, shake, reduced };
+  return { burst, ring, confetti, floatText, banner, countUp, shake, reduced };
 })();

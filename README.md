@@ -31,6 +31,34 @@ Each prompt shows one Common answer as a hint. On top of that:
 
 These numbers are constants at the top of [`js/game.js`](js/game.js).
 
+## Characters mode
+
+Flip the switch on the home screen from **Classic** to **Characters** (the whole page sweeps over to a blue theme).
+Whoever creates the lobby picks the mode, and everyone who joins gets it too.
+
+- Everyone is dealt a secret character (with a picture) that only they can see.
+- The box under the prompt switches between **Ask** and **Guess**. In Ask, you pick a player and send them a
+  question; they get Yes and No buttons. Questions are open to everyone, so no call is needed (but asking out
+  loud works too). Each player can have 3 unanswered questions waiting, and questions to someone who rerolls or
+  gets found are marked Skipped.
+- In Guess, a right guess reveals that player's character to everyone.
+- The history under the prompt shows every question with its answer, plus every guess and reroll.
+- **Reroll** swaps your character for a new one, twice per round, until someone finds it.
+- A round ends when every character is found, when the timer runs out (3–15 minutes, or switch it off), or when
+  the host presses **End round**.
+- No points: at the end, **Top detective** (most characters found) and **Hardest to crack** (most rounds nobody
+  guessed you) get crowned.
+
+There are 8 categories, about 900 characters in [`js/characters/`](js/characters): Video Games, TV Series, Movies,
+Celebrities, Anime, Mythology, Historical Figures and Internet. Each character is one line:
+
+```js
+"Dr. Eggman/Eggman/Robotnik @Doctor Eggman",   // names a guess may use, then the Wikipedia page for the picture
+```
+
+Pictures load from Wikipedia in each player's browser, or from a Fandom fan wiki for characters Wikipedia has no
+picture of (only the page title is sent). The few with no usable picture anywhere show their category's emoji. The format is explained at the top of [`js/chars.js`](js/chars.js).
+
 ## How it runs
 
 It's a pure static site, with no server. The host's browser runs the game, and players connect to it
@@ -83,6 +111,8 @@ How much someone must type before autofill suggests an answer is `AUTOFILL_MIN_S
 
 ## Music
 
-The background track is `assets/music.mp3`. Each player can turn it on or off and set the volume with the
+Classic plays `assets/music-menu.mp3` on the home screen and lobby, and alternates `music-1.mp3` and `music-2.mp3`
+in game. Characters mode has its own home/lobby track, `music-chars-menu.mp3`, and uses the same in-game tracks. Switching screens or modes
+crossfades between them. Each player can turn it on or off and set the volume with the
 sound button in the bottom-right corner, and their choice is saved in their own browser. Browsers block
 audio until you interact with the page, so it starts on your first tap or keypress.

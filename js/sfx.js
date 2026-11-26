@@ -66,7 +66,7 @@ const Sfx = (() => {
   }
 
   // Filtered noise burst (clicks, thumps, airy swooshes).
-  function noise({ t = 0, dur = 0.08, gain = 0.15, freq = 2000, q = 1.2, type = "bandpass", sweepTo = null, wet = false } = {}) {
+  function noise({ t = 0, dur = 0.08, gain = 0.15, freq = 2000, q = 1.2, type = "bandpass", sweepTo = null, wet = false, attack = 0 } = {}) {
     const start = ctx.currentTime + t;
     const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -80,10 +80,49 @@ const Sfx = (() => {
     if (sweepTo) f.frequency.exponentialRampToValueAtTime(sweepTo, start + dur);
     f.Q.value = q;
     const g = ctx.createGain();
-    g.gain.setValueAtTime(gain, start);
+    if (attack) {
+      // Swell in, then fade out (for swooshes).
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(gain, start + attack);
+    } else {
+      g.gain.setValueAtTime(gain, start);
+    }
     g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
     src.connect(f).connect(g).connect(master);
     if (wet) g.connect(verb);
+    src.start(start);
+  }
+
+  // Air that swells and fades while it travels across the speakers: the woosh's body.
+  function airSweep({ t = 0, dur = 1.1, peak = 0.5, gain = 0.25, dir = 1, from = 260, top = 2600, to = 480, q = 0.9 } = {}) {
+    const start = ctx.currentTime + t;
+    const len = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    // Brownish noise: softer and rounder than white noise.
+    let last = 0;
+    for (let i = 0; i < len; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = last * 3.5 + (Math.random() * 2 - 1) * 0.25; }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const f = ctx.createBiquadFilter();
+    f.type = "bandpass";
+    f.Q.value = q;
+    f.frequency.setValueAtTime(from, start);
+    f.frequency.exponentialRampToValueAtTime(top, start + peak);
+    f.frequency.exponentialRampToValueAtTime(to, start + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.exponentialRampToValueAtTime(gain, start + peak);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    let node = src.connect(f).connect(g);
+    if (ctx.createStereoPanner) {
+      const p = ctx.createStereoPanner();
+      p.pan.setValueAtTime(-0.85 * dir, start);
+      p.pan.linearRampToValueAtTime(0.85 * dir, start + dur);
+      node = node.connect(p);
+    }
+    node.connect(master);
+    node.connect(verb);
     src.start(start);
   }
 
@@ -116,6 +155,17 @@ const Sfx = (() => {
       tone(783.99, { dur: 1.1, gain: 0.14, partials: BELL });
       tone(1174.66, { t: 0.13, dur: 1.4, gain: 0.12, partials: BELL });
     },
+    // Switching game mode, timed to the circle reveal: a soft low "whomp" as it opens, air that
+    // swells and travels across the speakers as the ring expands, a glittery top end for the
+    // sparkles, then a rising three-note chime as it settles (bright for Characters, warm for Classic).
+    woosh(toChars) {
+      const dir = toChars ? 1 : -1;
+      tone(110, { dur: 0.6, gain: 0.18, partials: [[1, 1], [2, 0.25]], glideTo: 55, attack: 0.02, wet: false });
+      airSweep({ dir, dur: 1.15, peak: 0.5, gain: 0.26, from: 200, top: 2200, to: 420 });
+      airSweep({ t: 0.08, dir, dur: 0.95, peak: 0.45, gain: 0.05, from: 3000, top: 9000, to: 4000, q: 1.8 });
+      (toChars ? [987.77, 1318.5, 1975.53] : [783.99, 1046.5, 1567.98]).forEach((f, i) =>
+        tone(f, { t: 0.42 + i * 0.075, dur: 1.4, gain: 0.06, partials: BELL }));
+    },
     // Winner: rising arpeggio into a held chord.
     win() {
       [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, { t: i * 0.11, dur: 0.9, gain: 0.13, partials: MARIMBA }));
@@ -147,8 +197,8 @@ const Sfx = (() => {
     return true;
   }
 
-  function play(name) {
-    if (ready() && sounds[name]) sounds[name]();
+  function play(name, arg) {
+    if (ready() && sounds[name]) sounds[name](arg);
   }
 
   // Browsers only allow audio after the player interacts; call this on the first tap.
