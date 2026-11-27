@@ -982,7 +982,9 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 
   font-family: var(--display); font-weight: 800; color: var(--muted); background: var(--bg2); border: 1px dashed var(--line);
 }
 .reroll-btn small { margin-left: 4px; font-family: var(--body); font-weight: 600; opacity: .75; }
-.end-btn { margin-top: 8px; }
+.giveup-btn { margin-top: 8px; }
+.giveup-btn.out { opacity: .6; }
+.reroll-btn[hidden] { display: none; }
 .timer.untimed .timer-fill { width: 100% !important; opacity: .3; }
 .timer.untimed #tnum { font-size: .9rem; }
 
@@ -1038,7 +1040,7 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 
 
 @media (max-width: 720px) {
   /* Phones: your character, the guess box, then the character list with Reroll, then the feed. */
-  .chars-round .guess-feed { order: 4; margin-top: 14px; }
+
   .chars-round .side:not(.powers-card) { order: 3; margin-top: 8px; }
   .my-char { grid-template-columns: auto 1fr; gap: 14px; padding: 14px; margin-bottom: 14px; }
   .mc-eye { position: absolute; top: 10px; right: 10px; width: 34px; height: 34px; }
@@ -1139,8 +1141,8 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 
 
 /* History */
 .feed-title { font-family: var(--body); font-size: .78rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 700; margin: 6px 0 8px; }
-.feed-title:has(+ .guess-feed:empty) { display: none; }
-.guess-feed li.mine { border-color: color-mix(in srgb, var(--accent2) 30%, transparent); }
+
+
 .guess-feed li.q { color: var(--text); }
 .qa-badge { flex: none; margin-left: auto; padding: 2px 10px; border-radius: 99px; font-size: .72rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .qa-badge.yes { color: var(--good); background: color-mix(in srgb, var(--good) 16%, transparent); }
@@ -1148,8 +1150,75 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 
 .qa-badge.wait { color: var(--muted); background: rgba(255, 255, 255, .05); animation: pulse 1.4s ease-in-out infinite; }
 .qa-badge.void { color: var(--muted); text-decoration: line-through; }
 @media (max-width: 720px) {
-  .chars-round .feed-title { order: 4; margin-top: 16px; }
-  .chars-round .guess-feed { order: 5; margin-top: 0; }
+  .chars-round .history { order: 4; margin-top: 16px; }
+
   .im-switch button { font-size: .76rem; }
   .mc-stamp { position: static; grid-column: 1 / -1; justify-self: start; margin-top: -4px; transform: rotate(-2deg); }
 }
+
+/* History tabs: what you asked (grouped by player), what you were asked, everything */
+.history { margin-top: 18px; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.hist-head .feed-title { margin: 0; }
+.hist-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 99px; background: rgba(255, 255, 255, .04); border: 1px solid rgba(255, 255, 255, .07); }
+.hist-tabs button {
+  border: 0; background: none; color: var(--muted); font: 600 .8rem var(--body); padding: 6px 12px; border-radius: 99px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; transition: background .15s, color .15s;
+}
+.hist-tabs button:hover:not(.on) { color: var(--text); }
+.hist-tabs button.on { color: var(--text); background: color-mix(in srgb, var(--accent2) 22%, transparent); }
+.ht-n:empty { display: none; }
+.ht-n { min-width: 18px; padding: 0 5px; border-radius: 99px; font-size: .68rem; font-weight: 800; line-height: 18px; text-align: center; background: rgba(255, 255, 255, .1); color: var(--text); }
+.hist-empty { margin: 0; padding: 14px; border-radius: 12px; border: 1px dashed rgba(255, 255, 255, .1); color: var(--muted); font-size: .88rem; text-align: center; }
+.hist-body { display: grid; gap: 12px; }
+.hgroup { border-radius: 14px; padding: 10px; background: rgba(255, 255, 255, .025); border: 1px solid rgba(255, 255, 255, .07); }
+.hgroup.is-found { border-color: color-mix(in srgb, var(--good) 40%, transparent); }
+.hg-head { display: flex; align-items: center; gap: 8px; margin: 0 2px 8px; font-size: .92rem; }
+.hg-head .avatar { width: 26px; height: 26px; font-size: .7rem; }
+.hg-tally, .hg-found { margin-left: auto; font-size: .76rem; font-weight: 700; }
+.hg-tally i { font-style: normal; }
+.hg-tally .y { color: var(--good); }
+.hg-tally .n { color: var(--bad); }
+.hg-tally { color: var(--muted); }
+.hg-found { color: var(--good); }
+.hq-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.hq {
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; font-size: .9rem;
+  background: rgba(255, 255, 255, .03); border: 1px solid rgba(255, 255, 255, .05);
+}
+.hq.new { animation: chipPop .45s var(--ease-pop); }
+.hq-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.hq-from { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: .82rem; color: var(--muted); }
+.hq-from .avatar { width: 20px; height: 20px; font-size: .6rem; }
+.hq-from b { color: var(--text); }
+/* In "Everything": your own questions lean on a coloured edge, questions to you on another */
+.guess-feed li.by-me { border-left: 3px solid var(--accent2); }
+.guess-feed li.to-me { border-left: 3px solid var(--purple2); }
+.qa-badge.unsure { color: #f5b83d; background: color-mix(in srgb, #f5b83d 16%, transparent); }
+.btn.qa-unsure { background: color-mix(in srgb, #f5b83d 16%, var(--card2)); border-color: color-mix(in srgb, #f5b83d 50%, transparent); }
+.btn.qa-unsure:hover:not(:disabled) { background: color-mix(in srgb, #f5b83d 28%, var(--card2)) !important; border-color: #f5b83d !important; }
+.inq-btns .btn.qa-unsure { min-width: 0; white-space: nowrap; }
+.cl-quit { margin-left: 4px; font-size: .62rem; font-weight: 700; color: var(--muted); }
+.im-switch.off { opacity: .5; pointer-events: none; }
+@media (max-width: 720px) {
+  .hist-tabs { width: 100%; }
+  .hist-tabs button { flex: 1; justify-content: center; padding: 7px 6px; font-size: .74rem; }
+}
+
+/* Confirmed characteristics: AI tags from yes/no answers. Chips wrap onto new lines and long
+   ones wrap inside themselves, so nothing gets cut off or pushes the play area around. */
+.traits-card[hidden] { display: none; }
+.traits-card h3 { display: flex; align-items: center; justify-content: space-between; gap: 8px; letter-spacing: .08em; }
+.traits-card h3 .count { flex: none; white-space: nowrap; font-size: .66rem; letter-spacing: 0; text-transform: none; }
+.tr-group + .tr-group { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .06); }
+.tr-who { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; font-size: .82rem; min-width: 0; }
+.tr-who .avatar { width: 20px; height: 20px; font-size: .6rem; flex: none; }
+.tr-who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-tags { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.tr-tag {
+  max-width: 100%; padding: 4px 10px; border-radius: 99px; font-size: .76rem; font-weight: 700; line-height: 1.3;
+  overflow-wrap: anywhere; cursor: default;
+  color: var(--text); background: color-mix(in srgb, var(--good) 14%, transparent); border: 1px solid color-mix(in srgb, var(--good) 40%, transparent);
+}
+.tr-tag.neg { color: var(--muted); background: rgba(255, 255, 255, .04); border-color: rgba(255, 255, 255, .1); }
+.tr-tag.new { animation: chipPop .45s var(--ease-pop); }
