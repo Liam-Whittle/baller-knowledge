@@ -39,7 +39,7 @@
   const CHAR_REROLLS = 5;          // per player, per round
   const CHAR_GUESS_GAP_MS = 400;   // guesses sent faster than this are ignored
   const CHAR_ASK_GAP_MS = 1500;    // at most one question every 1.5 seconds per player
-  const CHAR_ASK_PENDING = 3;      // unanswered questions one player can have waiting
+  const CHAR_ASK_PENDING = 5;      // unanswered questions one player can have waiting
   const CHAR_ASK_LEN = 120;
   const CHAR_END_DELAY_MS = 1800;  // a beat to enjoy the last find before the reveal
   const CHAR_DEFAULTS = () => ({ rounds: 3, timer: 5, timerOn: true, categories: CHAR_CATEGORIES.map((c) => c.id) });
@@ -433,7 +433,7 @@
         }
         case "start":
           if (!isHost || hs.phase !== "lobby") return;
-          for (const p of hs.players.values()) { p.score = 0; p.stumps = 0; p.powers = hs.settings.powerups && hs.mode === "classic" ? freshPowers() : {}; }
+          for (const p of hs.players.values()) { p.score = 0; p.stumps = 0; p.crack = null; p.faced = null; p.powers = hs.settings.powerups && hs.mode === "classic" ? freshPowers() : {}; }
           hs.round = 0;
           hs.totalRounds = hs.settings.rounds;
           hs.charUsed = new Set();
@@ -471,6 +471,8 @@
             p.char = null;
             p.foundBy = null;
             p.stumps = 0;
+            p.crack = null;
+            p.faced = null;
           }
           publish();
           break;
@@ -501,6 +503,8 @@
             o.foundByName = p.name;
             o.foundAt = now - hs.startAt;
             p.cracked = (p.cracked || 0) + 1;
+            const asked = questionsTo(o.id).filter((q) => q.by === id).length;
+            if (!p.crack || asked < p.crack.n) p.crack = { n: asked, char: o.char, round: hs.round };
             p.score++;
             voidAsks(o.id);
             feedPush({ k: "hit", by: id, byName: p.name, target: o.id, targetName: o.name, char: o.char });
@@ -551,6 +555,9 @@
           if (!to || to === p || !to.char || to.foundBy) return deny("target");
           if (now - (p.lastAsk || 0) < CHAR_ASK_GAP_MS) return deny("fast");
           if ([...hs.asks.values()].filter((q) => q.by === id).length >= CHAR_ASK_PENDING) return deny("pending");
+          // Someone's waiting on your answer: answer at least one of their questions before asking again.
+          if (p.askLock && [...hs.asks.values()].some((x) => x.to === id)) return deny("answer");
+          p.askLock = true;
           p.lastAsk = now;
           const q = feedPush({ k: "q", by: id, byName: p.name, to: to.id, toName: to.name, text, answer: null });
           hs.asks.set(q.n, q);
@@ -564,6 +571,8 @@
           if (!q || q.to !== id || hs.phase !== "round") return;
           q.answer = ["yes", "no", "unsure"].includes(msg.a) ? msg.a : msg.yes ? "yes" : "no";
           hs.asks.delete(q.n);
+          const answerer = hs.players.get(id);
+          if (answerer) answerer.askLock = false; // answered one, so they can ask again
           if (q.answer !== "unsure") tagAnswer(q);
           publish();
           break;
@@ -590,6 +599,13 @@
           publish();
         })
         .catch((err) => { if (err.code === "auth") toast("Your AI key was rejected, so AI is off. Check it in settings.", "error"); });
+    }
+
+    // This round's questions about a player's current character (anything before their last reroll
+    // was about a different character). Skipped ones don't count.
+    function questionsTo(pid) {
+      const since = Math.max(0, ...hs.feed.filter((f) => f.k === "reroll" && f.by === pid).map((f) => f.n));
+      return hs.feed.filter((f) => f.k === "q" && f.to === pid && f.n > since && f.answer !== "void");
     }
 
     // Questions still waiting for someone who's been found (or rerolled) no longer need an answer.
@@ -622,7 +638,7 @@
       hs.asks = new Map();
       hs.traitCalls = 0;
       for (const p of hs.players.values()) {
-        Object.assign(p, { char: null, foundBy: null, foundByName: null, foundAt: 0, rerolls: CHAR_REROLLS, cracked: 0, lastGuess: 0, answers: [], done: false, gaveUp: false });
+        Object.assign(p, { char: null, foundBy: null, foundByName: null, foundAt: 0, rerolls: CHAR_REROLLS, cracked: 0, lastGuess: 0, answers: [], done: false, gaveUp: false, askLock: false });
       }
       for (const p of hs.players.values()) if (p.connected) p.char = drawChar(p);
       hs.ref = null;
@@ -662,6 +678,8 @@
       for (const p of hs.players.values()) {
         if (!p.char) continue;
         if (!p.foundBy) p.stumps = (p.stumps || 0) + 1;
+        const faced = questionsTo(p.id).length;
+        if (faced && (!p.faced || faced > p.faced.n)) p.faced = { n: faced, char: p.char, round: hs.round, found: !!p.foundBy };
         chars.push({ id: p.id, name: p.name, char: p.char, foundBy: p.foundBy, foundByName: p.foundByName, foundAt: p.foundAt });
       }
       hs.reveal = { chars, found: chars.filter((c) => c.foundBy).length };
@@ -820,7 +838,8 @@
           // Characters mode: nothing about a character (not even its category) is shared until it's found.
           ...(chars ? {
             playing: !!p.char, found: p.foundBy ? p.char : null,
-            foundBy: p.foundBy || null, foundByName: p.foundByName || null, rerolls: p.rerolls || 0, stumps: p.stumps || 0, gaveUp: !!p.gaveUp,
+            foundBy: p.foundBy || null, foundByName: p.foundByName || null, rerolls: p.rerolls || 0, stumps: p.stumps || 0, gaveUp: !!p.gaveUp, askLock: !!p.askLock,
+            crack: p.crack || null, faced: p.faced || null,
           } : {}),
         })),
         question: q ? {
@@ -2077,6 +2096,8 @@
     input.maxLength = ask ? CHAR_ASK_LEN : 40;
     $("#ans-btn").textContent = ask ? "Ask" : "Guess";
     if (!ask) closeAskMenu();
+    $("#ans-form").classList.remove("locked");
+    if (view.started && !view.timeUp) $("#ans-btn").disabled = gaveUp();
     $("#im-hint").textContent = ask
       ? "Ask about their character. They can answer yes, no or not sure."
       : "Type who you think someone's character is.";
@@ -2088,6 +2109,14 @@
   const CHEVRON = `<svg class="ask-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   const CHECK = `<svg class="ask-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   const gaveUp = () => !!(me() && me().gaveUp);
+  // After asking, a question waiting for you must be answered before you can ask again.
+  // (Answering one here unlocks right away, before the host's update arrives.)
+  function mustAnswer() {
+    const m = me();
+    if (!m || !m.askLock || !view.qaSent) return false;
+    const waiting = (state.asks || []).filter((q) => q.to === session.me);
+    return waiting.length > 0 && !waiting.some((q) => view.qaSent.has(q.n));
+  }
   const askable = () => (gaveUp() ? [] : state.players.filter((p) => p.id !== session.me && p.playing && !p.found));
 
   function renderAskTargets() {
@@ -2096,7 +2125,17 @@
     const can = askable();
     // Hidden in Guess mode, and when there's nobody left to ask.
     $("#ask-to").hidden = view.inputMode !== "ask" || !can.length;
-    $("#ans").readOnly = (view.inputMode === "ask" && !can.length) || gaveUp();
+    const locked = view.inputMode === "ask" && mustAnswer();
+    $("#ans").readOnly = (view.inputMode === "ask" && !can.length) || gaveUp() || locked;
+    $("#ans-form").classList.toggle("locked", locked);
+    const hint = $("#im-hint");
+    if (hint && view.inputMode === "ask") hint.textContent = locked
+      ? "Someone's waiting on you. Answer their question to ask another."
+      : "Ask about their character. They can answer yes, no or not sure.";
+    const inq = $(".inq");
+    if (inq) inq.classList.toggle("nudge", locked);
+    const ab = $("#ans-btn");
+    if (ab) ab.disabled = gaveUp() || !view.started || view.timeUp || locked;
     if (!can.some((p) => p.id === view.askTarget)) view.askTarget = can.length ? can[0].id : null;
     const t = can.find((p) => p.id === view.askTarget);
     const key = `${can.map((p) => `${p.id}:${p.name}:${p.avatar}`).join("|")}>${view.askTarget}`;
@@ -2161,7 +2200,8 @@
     if (view.inputMode !== "ask") { input.placeholder = gaveUp() ? "You gave up. Keep answering questions about yours" : "Type a guess…"; return; }
     const t = state.players.find((p) => p.id === view.askTarget);
     input.placeholder = gaveUp() ? "You gave up. Keep answering questions about yours"
-      : t ? "Ask a yes/no question…" : "Everyone's been found. Nobody left to ask";
+      : !t ? "Everyone's been found. Nobody left to ask"
+      : mustAnswer() ? "Answer the question for you first…" : "Ask a yes/no question…";
   }
 
   function submitAsk() {
@@ -2189,6 +2229,7 @@
       fast: "Give them a second to answer",
       pending: `You have ${CHAR_ASK_PENDING} questions waiting. Wait for an answer first.`,
       gaveup: "You gave up this round.",
+      answer: "Answer the question waiting for you first.",
     }[msg.why] || "That question didn't send", "meh", 2600);
   }
 
@@ -2228,6 +2269,7 @@
     session.send({ t: "qa", n, a, yes: a === "yes" });
     Sfx.play("tick");
     renderIncoming();
+    renderAskTargets();
   }
 
   // Your own character, big at the top. The eye button blurs it if someone's looking over your shoulder.
@@ -2311,7 +2353,7 @@
     b.classList.toggle("out", out);
     b.textContent = out ? "🏳️ You gave up" : "🏳️ I give up";
     $("#im-switch").classList.toggle("off", out);
-    $("#ans-btn").disabled = out || !view.started || view.timeUp;
+    $("#ans-btn").disabled = out || !view.started || view.timeUp || (view.inputMode === "ask" && mustAnswer());
   }
 
   function submitGuess() {
@@ -2642,12 +2684,21 @@
       return most > 0 ? { most, who: ps.filter((p) => (p[key] || 0) === most) } : { most: 0, who: [] };
     };
     const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    // The single best (or tied best) record of a kind, by a stat that holds { n, char }.
+    const record = (key, pickLowest) => {
+      const has = ps.filter((p) => p[key]);
+      if (!has.length) return { most: 0, who: [] };
+      const ns = has.map((p) => p[key].n);
+      const top = pickLowest ? Math.min(...ns) : Math.max(...ns);
+      return { most: top, who: has.filter((p) => p[key].n === top), key };
+    };
+    const charName = (ref) => { const c = ref && Chars.of(ref); return c ? c.name : "?"; };
     const award = (icon, title, b, line, i) => `
       <div class="card award" style="--d:${300 + i * 200}ms">
         <span class="aw-ico" aria-hidden="true">${icon}</span>
         <span class="aw-title">${title}</span>
         ${b.who.length
-          ? `<div class="aw-who">${b.who.map((p) => `<span>${avatar(p)}<b>${esc(p.name)}</b></span>`).join("")}</div><span class="aw-line">${line(b.most)}</span>`
+          ? `<div class="aw-who">${b.who.map((p) => `<span>${avatar(p)}<b>${esc(p.name)}</b></span>`).join("")}</div><span class="aw-line">${line(b.most, b)}</span>`
           : `<span class="aw-line">Nobody this time</span>`}
       </div>`;
     app.innerHTML = `
@@ -2658,6 +2709,10 @@
         <div class="awards">
           ${award("🕵️", "Top detective", best("score"), (n) => `found ${plural(n, "character")}`, 0)}
           ${award("🧊", "Hardest to crack", best("stumps"), (n) => `nobody guessed them ${n === 1 ? "once" : `${n} times`}`, 1)}
+          ${award("⚡", "Fewest questions to crack", record("crack", true), (n, b) =>
+            `${n ? `cracked ${b.who.length === 1 ? esc(charName(b.who[0].crack.char)) : "a character"} in ${plural(n, "question")}` : `got ${b.who.length === 1 ? esc(charName(b.who[0].crack.char)) : "one"} without asking a single question`}`, 2)}
+          ${award("🛡️", "Most questions survived", record("faced", false), (n, b) =>
+            `faced ${plural(n, "question")}${b.who.length === 1 ? ` as ${esc(charName(b.who[0].faced.char))}${b.who[0].faced.found ? "" : " and was never found"}` : " in one round"}`, 3)}
         </div>
         <section class="card">
           <h3>Everyone</h3>
@@ -2686,7 +2741,7 @@
           <li><span class="n">3</span><span>Think you know someone's character? <b>Type your guess.</b> Get it right and it's revealed to everyone.</span></li>
           <li><span class="n">4</span><span>Never heard of yours? <b>Reroll</b> it for a new one, up to ${CHAR_REROLLS} times a round.</span></li>
           <li><span class="n">5</span><span>Stuck? Press <b>I give up</b>. The round ends when every character is found, when everyone still hunting has given up, or when time runs out (at least 3 minutes, or switch the timer off).</span></li>
-          <li><span class="n">6</span><span>No points, just bragging rights: <b>Top detective</b> and <b>Hardest to crack</b> are crowned at the end.</span></li>
+          <li><span class="n">6</span><span>No points, just bragging rights: <b>Top detective</b>, <b>Hardest to crack</b>, <b>Fewest questions to crack</b> and <b>Most questions survived</b> are crowned at the end.</span></li>
         </ol>
         <div class="how-cats">
           <span class="label">Character categories</span>
