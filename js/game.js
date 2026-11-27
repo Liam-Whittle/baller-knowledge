@@ -2017,8 +2017,11 @@
                 <button type="button" class="ask-btn" id="ask-btn" data-act="ask-menu" aria-haspopup="listbox" aria-expanded="false"></button>
                 <div class="ask-menu" id="ask-menu" role="listbox" aria-label="Who to ask" hidden></div>
               </div>
-              <div class="ans-wrap">
+              <div class="ans-wrap has-mic">
                 <input id="ans" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" disabled>
+                <button type="button" class="mic-btn" id="mic-btn" data-act="voice" aria-label="Speak instead of typing" title="Speak instead of typing" hidden>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
               </div>
               <button class="btn primary" type="submit" id="ans-btn" disabled>Guess</button>
             </form>
@@ -2062,6 +2065,8 @@
     input.addEventListener("keydown", (e) => { if (e.key === "Escape") input.value = ""; });
     $("#ans-form").addEventListener("submit", (e) => { e.preventDefault(); view.inputMode === "ask" ? submitAsk() : submitGuess(); });
     view.askKey = null;
+    stopVoice();
+    view.rec = null;
 
     view.inputMode = view.inputMode || "ask";
     view.incomingKey = null;
@@ -2136,6 +2141,7 @@
     if (inq) inq.classList.toggle("nudge", locked);
     const ab = $("#ans-btn");
     if (ab) ab.disabled = gaveUp() || !view.started || view.timeUp || locked;
+    renderMic();
     if (!can.some((p) => p.id === view.askTarget)) view.askTarget = can.length ? can[0].id : null;
     const t = can.find((p) => p.id === view.askTarget);
     const key = `${can.map((p) => `${p.id}:${p.name}:${p.avatar}`).join("|")}>${view.askTarget}`;
@@ -2217,6 +2223,7 @@
     if (now - (view.lastAskAt || 0) < CHAR_ASK_GAP_MS) { feedback("Give them a second to answer", "meh", 1600); return; }
     view.lastAskAt = now;
     if (!/[?？]$/.test(text)) text += "?";
+    stopVoice();
     input.value = "";
     session.send({ t: "q", to: t.id, text, nonce: Math.random().toString(36).slice(2, 12) });
   }
@@ -2345,6 +2352,79 @@
     b.innerHTML = `🎲 Reroll <small>${m.foundBy ? "found" : `${left} left`}</small>`;
   }
 
+  // ---------- Voice input ----------
+  // The browser's own speech recognition types what you say into the box. You still press Ask
+  // (or Guess) yourself. Works in Chrome, Edge and Safari; elsewhere the mic is dimmed and says so.
+  // Some Chromium browsers (Brave, Opera, Electron apps) have the API but no speech service
+  // behind it, so it always fails with a "network" error: hide the mic there.
+  const noSpeechService = !!navigator.brave || /\b(Electron|OPR|Vivaldi)\//.test(navigator.userAgent);
+  const SpeechRec = noSpeechService ? null : window.SpeechRecognition || window.webkitSpeechRecognition;
+  let voiceDead = false; // set when the speech service refuses us, until the page reloads
+  const voiceOk = () => !!SpeechRec && !voiceDead;
+
+  function renderMic() {
+    const b = $("#mic-btn");
+    const input = $("#ans");
+    if (!b || !input) return;
+    // Always shown: in a browser without speech to text it's dimmed, and a click says why.
+    b.hidden = false;
+    b.classList.toggle("unsupported", !voiceOk());
+    $(".ans-wrap").classList.add("has-mic");
+    const off = input.disabled || input.readOnly;
+    if (off && view.rec) view.rec.abort();
+    b.disabled = off;
+    b.classList.toggle("on", !!view.rec);
+    b.setAttribute("aria-pressed", String(!!view.rec));
+    const label = !voiceOk() ? VOICE_UNSUPPORTED : view.rec ? "Listening… click to stop" : "Speak instead of typing";
+    b.setAttribute("aria-label", view.rec ? "Stop listening" : label);
+    b.title = label;
+  }
+
+  const VOICE_UNSUPPORTED = "Browser doesn't support speech to text. Use Chrome, Edge or Safari.";
+
+  function toggleVoice() {
+    if (view.rec) { view.rec.stop(); return; }
+    const input = $("#ans");
+    if (!voiceOk()) { feedback(`🎤 ${VOICE_UNSUPPORTED}`, "meh", 4200); return; }
+    if (!input || input.disabled || input.readOnly) return;
+    const rec = new SpeechRec();
+    rec.lang = navigator.language || "en-US";
+    rec.interimResults = true; // words appear as you speak
+    rec.continuous = false;    // stops by itself when you pause
+    rec.maxAlternatives = 1;
+    const before = input.value.trim();
+    let heard = "";
+    rec.onresult = (e) => {
+      heard = [...e.results].map((r) => r[0].transcript).join("").replace(/\s+/g, " ").trim();
+      if (!input.isConnected) return;
+      const text = before ? `${before} ${heard}` : heard.charAt(0).toUpperCase() + heard.slice(1);
+      input.value = text.slice(0, input.maxLength > 0 ? input.maxLength : 200);
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") feedback("The microphone is blocked. Allow it in your browser to use voice.", "meh", 3600);
+      else if (e.error === "no-speech") feedback("Didn't hear anything. Click the mic and try again.", "meh", 2400);
+      else if (e.error === "network" && !navigator.onLine) feedback("You're offline. Voice typing needs the internet.", "meh", 2800);
+      else if (e.error === "network") {
+        // Online but the browser's speech service won't answer: this browser can't do it.
+        voiceDead = true;
+        feedback(`🎤 ${VOICE_UNSUPPORTED}`, "meh", 4200);
+      }
+    };
+    rec.onend = () => {
+      if (view.rec === rec) view.rec = null;
+      renderMic();
+      if (input.isConnected && !input.disabled && heard) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    };
+    view.rec = rec;
+    try { rec.start(); } catch { view.rec = null; }
+    if (view.rec) Sfx.play("tick");
+    renderMic();
+  }
+  const stopVoice = () => { if (view.rec) view.rec.abort(); };
+
   function renderGiveUp() {
     const b = $("#giveup-btn");
     if (!b) return;
@@ -2352,6 +2432,7 @@
     b.disabled = out || !view.started || view.timeUp;
     b.classList.toggle("out", out);
     b.textContent = out ? "🏳️ You gave up" : "🏳️ I give up";
+    renderMic();
     $("#im-switch").classList.toggle("off", out);
     $("#ans-btn").disabled = out || !view.started || view.timeUp || (view.inputMode === "ask" && mustAnswer());
   }
@@ -2370,6 +2451,7 @@
     const now = Date.now();
     if (now - (view.lastGuessAt || 0) < CHAR_GUESS_GAP_MS) return;
     view.lastGuessAt = now;
+    stopVoice();
     input.value = "";
     session.send({ t: "guess", text, nonce: Math.random().toString(36).slice(2, 12) });
   }
@@ -2962,6 +3044,7 @@
       case "next": session.send({ t: "next" }); break;
       case "lobby": session.send({ t: "lobby" }); break;
       case "reroll": rerollChar(); break;
+      case "voice": toggleVoice(); break;
       case "ask-menu": $("#ask-menu").hidden ? openAskMenu() : closeAskMenu(); break;
       case "hide-char": view.hideChar = !view.hideChar; renderMyChar(); break;
       case "give-up":
